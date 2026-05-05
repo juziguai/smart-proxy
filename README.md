@@ -310,13 +310,36 @@ python --version
 
 ## 贡献
 
-欢迎贡献！请遵循以下步骤：
+欢迎一起完善 smart-proxy！不管是修 bug、加功能，还是适配其他系统，都欢迎 PR。
 
-1. Fork 本仓库
-2. 创建特性分支：`git checkout -b feature/your-feature`
-3. 提交更改：`git commit -m 'Add your feature'`
-4. 推送分支：`git push origin feature/your-feature`
-5. 创建 Pull Request
+### 我们欢迎的贡献
+
+- **适配其他系统**：macOS（networksetup）、Linux（gsettings/env）的代理检测
+- **新功能**：规则引擎、日志增强、配置文件支持等
+- **白名单扩充**：添加更多国内常见域名
+- **文档完善**：使用示例、FAQ、翻译等
+- **Bug 修复**：任何影响稳定性的问题
+
+### 协作流程
+
+1. **先开 Issue 讨论**：大改动先讨论方案，避免重复劳动
+2. **Fork + 分支**：
+   ```powershell
+   git checkout -b feature/your-feature
+   ```
+3. **保持单一职责**：一个 PR 只做一件事，方便 review
+4. **测试验证**：附上测试结果（截图或命令输出）
+5. **提交 PR**：说明改了什么、为什么改、怎么测的
+
+### 提交规范
+
+```
+feat: 新功能描述
+fix: 修复 xxx 问题
+docs: 更新文档
+refactor: 重构 xxx
+test: 添加测试
+```
 
 ### 开发环境
 
@@ -336,6 +359,7 @@ curl -x http://127.0.0.1:8889 https://www.baidu.com
 - 使用 Python 标准库，不引入第三方依赖
 - 保持代码简洁，单个文件不超过 500 行
 - 添加新功能时同步更新白名单示例
+- 跨平台适配请放在独立文件（如 `proxy_macos.py`、`proxy_linux.py`）
 
 ## 许可证
 
