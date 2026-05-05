@@ -1,5 +1,7 @@
 """Smart proxy sidecar — auto-detect Windows system proxy per request."""
 import asyncio
+import fnmatch
+import os
 import sys
 import time
 import winreg
@@ -57,6 +59,58 @@ class Cache:
 
 
 proxy_cache = Cache(CACHE_SEC)
+
+# ── whitelist ────────────────────────────────────────────────────────
+
+WHITELIST_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "whitelist.txt")
+WHITELIST_RELOAD_SEC = 60
+
+
+class Whitelist:
+    def __init__(self, path, reload_interval):
+        self._path = path
+        self._interval = reload_interval
+        self._expires = 0
+        self._patterns = set()
+
+    def _load(self):
+        try:
+            with open(self._path, encoding="utf-8") as f:
+                self._patterns = {
+                    line.strip() for line in f
+                    if line.strip() and not line.startswith("#")
+                }
+        except FileNotFoundError:
+            self._patterns = set()
+
+    def match(self, host):
+        now = time.monotonic()
+        if now >= self._expires:
+            self._load()
+            self._expires = now + self._interval
+        if not self._patterns:
+            return False
+        return any(fnmatch.fnmatch(host, p) for p in self._patterns)
+
+
+whitelist = Whitelist(WHITELIST_FILE, WHITELIST_RELOAD_SEC)
+
+
+def extract_host(target, headers_data):
+    """Extract hostname from CONNECT target or Host header."""
+    # CONNECT: target is "host:port"
+    if ":" in target:
+        host = target.rsplit(":", 1)[0]
+    else:
+        host = target
+    # plain HTTP: fallback to Host header
+    if not host:
+        for line in headers_data.split(b"\r\n"):
+            if line.lower().startswith(b"host:"):
+                host = line.split(b":", 1)[1].strip().decode()
+                host, _, _ = host.partition(":")
+                break
+    return host
 
 
 def log(msg):
@@ -233,24 +287,33 @@ async def handle(client_r, client_w):
     parts = first_line.decode("latin-1", errors="replace").rstrip("\r\n").split(" ")
     method = parts[0] if parts else "?"
     target = parts[1] if len(parts) > 1 else "?"
-    via = f"proxy {upstream[0]}:{upstream[1]}" if upstream else "direct"
-    log(f"{method} {target[:80]} -> {via}")
+
+    # extract host and check whitelist
+    host = extract_host(target, first_line)
+    force_direct = whitelist.match(host)
+
+    if force_direct:
+        via = "direct (whitelist)"
+    elif upstream:
+        via = f"proxy {upstream[0]}:{upstream[1]}"
+    else:
+        via = "direct"
+    log(f"{method} {host or target[:80]} -> {via}")
 
     if method == "CONNECT":
-        # 消耗 CONNECT 请求的剩余头行，直到 \r\n\r\n
         while True:
             line = await client_r.readline()
             if line in (b"\r\n", b"\n", b""):
                 break
-        if upstream:
-            await connect_via_proxy(client_r, client_w, target, upstream)
-        else:
+        if force_direct or not upstream:
             await connect_direct_tunnel(client_r, client_w, target)
-    else:
-        if upstream:
-            await http_via_proxy(client_r, client_w, first_line, upstream)
         else:
+            await connect_via_proxy(client_r, client_w, target, upstream)
+    else:
+        if force_direct or not upstream:
             await http_direct(client_r, client_w, first_line)
+        else:
+            await http_via_proxy(client_r, client_w, first_line, upstream)
     try:
         client_w.close()
     except Exception:

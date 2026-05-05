@@ -1,0 +1,29 @@
+# 白名单 — 命中的域名强制直连，不走代理
+# 一行一个，支持通配符（fnmatch 语法）
+# 文件不存在或为空时白名单不生效，原流程不变
+
+# 国内常见域名
+*.baidu.com
+*.taobao.com
+*.tmall.com
+*.alipay.com
+*.alibaba.com
+*.jd.com
+*.qq.com
+*.weixin.qq.com
+*.bilibili.com
+*.zhihu.com
+*.douyin.com
+*.bytedance.com
+*.xiaomi.com
+*.huawei.com
+*.cn
+*.163.com
+*.sina.com
+*.weibo.com
+*.csdn.net
+*.gitee.com
+
+# 本地
+localhost
+127.0.0.1
