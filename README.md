@@ -31,17 +31,25 @@ smart-proxy 在 Claude Code 和网络之间加了一层薄薄的本地代理（s
                           │                                        │
      Claude Code ────────► 127.0.0.1:8889 (sidecar)               │
                           │    │                                   │
+                          │    ├── 提取目标域名                     │
+                          │    │   CONNECT target / Host header     │
+                          │    │                                   │
+                          │    ├── 匹配白名单？                     │
+                          │    │   ├─ 是 → 强制直连 ──────────►    │
+                          │    │   └─ 否 ↓                         │
+                          │    │                                   │
                           │    ├── 读注册表                         │
                           │    │   HKLM\...\Internet Settings       │
                           │    │   ┌─ ProxyEnable=0 → 直连 ────┐  │
                           │    │   └─ ProxyEnable=1 → 代理 ──┐  │  │
                           │    │                              │  │  │
-                          │    ├── 直连 ─────────────────► api.deepseek.com
+                          │    ├── 直连 ─────────────────► 目标服务器│
                           │    │                                     │
                           │    └── 代理 ──► 127.0.0.1:10090 ──► 出站│
                           │               (v2rayA / Clash / ...)     │
                           │                                          │
                           │    缓存 3 秒，下次请求重新检测           │
+                          │    白名单文件变更 → 60 秒自动重载        │
                           │    你中途开关代理 → 最多 3 秒自动切换    │
                           └──────────────────────────────────────────┘
 
@@ -122,6 +130,36 @@ python smart-proxy.py
 start "" "<项目路径>\start-proxy.vbs"
 ```
 
+## 白名单
+
+可选功能。创建 `whitelist.txt` 文件（与 `smart-proxy.py` 同目录），一行一个域名，支持通配符：
+
+```
+*.baidu.com
+*.taobao.com
+*.bilibili.com
+*.cn
+localhost
+```
+
+- 文件不存在或为空 → 原流程不变
+- 命中白名单 → 跳过注册表检测，强制直连
+- 60 秒自动重载文件变更
+
+### 测试验证
+
+代理软件设为全局模式时的耗时对比：
+
+| 域名 | 耗时 | 路径 |
+|------|------|------|
+| baidu.com | 169ms | 直连（白名单命中） |
+| qq.com | 147ms | 直连（白名单命中） |
+| douban.com | 2.3s | 代理（白名单未命中） |
+| 36kr.com | 1.6s | 代理（白名单未命中） |
+| google.com | 0.99s | 代理（国外） |
+
+白名单命中直连约 0.15 秒，未命中走代理约 2 秒，差异 10 倍+。
+
 ## 兼容性
 
 - 不依赖特定代理软件。只要代理软件正确设置了 Windows 系统代理（注册表 `ProxyEnable` + `ProxyServer`），就能自动识别
@@ -133,5 +171,6 @@ start "" "<项目路径>\start-proxy.vbs"
 | 文件 | 说明 |
 |------|------|
 | `smart-proxy.py` | 核心 sidecar，监听 127.0.0.1:8889 |
+| `whitelist.txt` | 白名单域名配置（可选，一行一个） |
 | `claude-with-proxy.ps1` | Claude Code 启动脚本模板（需替换路径） |
 | `start-proxy.vbs` | Windows 无窗口后台启动脚本 |
