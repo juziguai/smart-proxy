@@ -1,4 +1,4 @@
-# Claude Code 智能代理启动脚本
+﻿# Claude Code 智能代理启动脚本
 # 复制到 C:\Users\<用户名>\claude.ps1，修改下方路径后使用
 
 # ====== 改这两处 ======
