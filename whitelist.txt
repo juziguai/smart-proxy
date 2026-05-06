@@ -24,6 +24,13 @@
 *.csdn.net
 *.gitee.com
 
+# MiniMax / 海螺 AI
+*.minimax.chat
+*.minimaxi.com
+*.hailuoai.com
+*.hailuoai.video
+*.turbodesk.cn
+
 # 本地
 localhost
 127.0.0.1
