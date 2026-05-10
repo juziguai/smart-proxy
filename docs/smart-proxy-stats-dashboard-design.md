@@ -308,6 +308,7 @@ V1 layout should be practical rather than decorative:
 - Estimated API cost: apply local model pricing to usage totals and clearly
   label it as an estimate rather than the provider's final bill.
 - Trend chart: show token and estimated cost movement for the selected range.
+  It defaults to all models and supports multi-select model filtering.
 - Range selector: day/week/month/all.
 - Clear button: clears only smart-proxy request statistics by default.
 
@@ -322,6 +323,8 @@ Terminology:
   <https://api-docs.deepseek.com/zh-cn/quick_start/pricing/>.
 - MiniMax and MiMo are token-plan models in this setup, so the dashboard should
   display their tokens but not add them to estimated cash API spend.
+- Cost values in the dashboard are rounded to two decimal places for display;
+  raw API values may keep more precision.
 
 ## Performance Design
 

@@ -225,7 +225,7 @@ smart-proxy 会在同一个 Python 进程里同时启动两个本地服务：
 - 输入 token、输出 token、cache read、cache write
 - 模型拆分榜单：按模型展示总 token、输入、输出、cache read、cache write
 - API 预估费用：DeepSeek API 模型按官方价格估算，套餐模型标记为套餐内
-- 趋势图：展示当前范围内 token 与预估费用走势
+- 趋势图：默认展示全部模型的 token 与预估费用走势，也支持多选模型后查看筛选后的趋势
 - 日 / 周 / 月 / 全部范围切换
 - 清除 smart-proxy 请求统计按钮
 
@@ -252,6 +252,7 @@ smart-proxy 不解密 HTTPS，也不会读取 API key。token 用量来自 Claud
 - `deepseek-v4-flash`、`deepseek-v4-pro`：按 DeepSeek 官方“模型 & 价格”页面的百万 tokens 单价估算。
 - `MiniMax-*`、`mimo-*`：按 token plan 套餐处理，不计入 API 现金费用。
 - 其他未知模型：保留 token 统计，但费用标记为未计价。
+- 页面展示费用时四舍五入到 2 位小数；API 内部保留原始浮点估算值。
 
 当前 DeepSeek 价格来源：
 

@@ -59,10 +59,11 @@ class StatsStore:
         usage = self._get_usage_summary(since)
         return {"proxy": proxy, "usage": usage}
 
-    def get_trends(self, range_name, now=None, since=None):
+    def get_trends(self, range_name, now=None, since=None, models=None):
         since = since or self._since_for_range(range_name, now)
         interval = "hour" if range_name == "day" else "day"
         buckets = {}
+        models = [model for model in (models or []) if model]
 
         with self._connection() as conn:
             proxy_rows = conn.execute(
@@ -76,23 +77,8 @@ class StatsStore:
                 ),
                 [since] if since else [],
             ).fetchall()
-            usage_rows = conn.execute(
-                self._range_query(
-                    """
-                    SELECT
-                        timestamp,
-                        model,
-                        input_tokens,
-                        output_tokens,
-                        cache_read_input_tokens,
-                        cache_creation_input_tokens
-                    FROM usage_events
-                    """,
-                    "timestamp",
-                    since,
-                ),
-                [since] if since else [],
-            ).fetchall()
+            usage_sql, usage_params = self._usage_trends_query(since, models)
+            usage_rows = conn.execute(usage_sql, usage_params).fetchall()
 
         for row in proxy_rows:
             bucket = self._bucket_key(row["started_at"], interval)
@@ -142,6 +128,7 @@ class StatsStore:
             "range": range_name,
             "interval": interval,
             "currency": "CNY",
+            "models": models,
             "points": result,
         }
 
@@ -419,6 +406,30 @@ class StatsStore:
         if since:
             return f"{select_sql} WHERE {time_column} >= ?"
         return select_sql
+
+    def _usage_trends_query(self, since, models):
+        sql = """
+            SELECT
+                timestamp,
+                model,
+                input_tokens,
+                output_tokens,
+                cache_read_input_tokens,
+                cache_creation_input_tokens
+            FROM usage_events
+        """
+        clauses = []
+        params = []
+        if since:
+            clauses.append("timestamp >= ?")
+            params.append(since)
+        if models:
+            placeholders = ", ".join("?" for _ in models)
+            clauses.append(f"model IN ({placeholders})")
+            params.extend(models)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        return sql, params
 
     def _bucket_key(self, value, interval):
         dt = parse_datetime(value)

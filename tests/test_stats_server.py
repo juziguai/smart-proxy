@@ -79,7 +79,22 @@ class StatsServerTests(unittest.TestCase):
         payload = json.loads(body.decode("utf-8"))
         self.assertEqual(payload["range"], "day")
         self.assertEqual(payload["interval"], "hour")
+        self.assertEqual(payload["models"], [])
         self.assertEqual(payload["points"], [])
+
+    def test_trends_endpoint_accepts_model_filters(self):
+        with TemporaryDirectory() as temp_dir:
+            store = StatsStore(f"{temp_dir}/stats.db")
+
+            status, _headers, body = handle_stats_request(
+                "GET",
+                urlparse("/api/trends?range=day&model=a&model=b"),
+                store,
+            )
+
+        self.assertEqual(status, 200)
+        payload = json.loads(body.decode("utf-8"))
+        self.assertEqual(payload["models"], ["a", "b"])
 
     def test_unknown_endpoint_returns_404_json(self):
         with TemporaryDirectory() as temp_dir:
@@ -164,6 +179,8 @@ class StatsServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("trendChart", html)
         self.assertIn("renderTrendChart", html)
+        self.assertIn("selectedModels", html)
+        self.assertIn("renderModelFilter", html)
         self.assertIn("/api/trends", html)
 
     def test_build_stats_response_encodes_json(self):

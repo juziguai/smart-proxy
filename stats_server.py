@@ -35,7 +35,11 @@ def handle_stats_request(method, parsed_url, stats_store):
     if method == "GET" and parsed_url.path == "/api/trends":
         params = parse_qs(parsed_url.query)
         range_name = (params.get("range") or ["day"])[0]
-        return build_stats_response(200, stats_store.get_trends(range_name))
+        models = params.get("model") or []
+        return build_stats_response(
+            200,
+            stats_store.get_trends(range_name, models=models),
+        )
 
     if method == "POST" and parsed_url.path == "/api/clear-proxy-stats":
         stats_store.clear_proxy_stats()
@@ -147,6 +151,7 @@ DASHBOARD_HTML = """<!doctype html>
       gap: 18px;
     }
     .card {
+      min-width: 0;
       min-height: 148px;
       border: 1px solid var(--line);
       border-top: 4px solid var(--accent);
@@ -165,7 +170,7 @@ DASHBOARD_HTML = """<!doctype html>
       overflow: hidden;
       text-overflow: clip;
       white-space: nowrap;
-      font-size: 44px;
+      font-size: 42px;
       line-height: 1;
       font-weight: 900;
       letter-spacing: 0;
@@ -206,6 +211,32 @@ DASHBOARD_HTML = """<!doctype html>
       color: var(--muted);
       font-size: 13px;
       font-weight: 800;
+    }
+    .model-filter {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 0 0 14px;
+    }
+    .model-filter button {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--wash);
+      color: #29416d;
+      cursor: pointer;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 800;
+      max-width: 260px;
+      overflow: hidden;
+      padding: 8px 10px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .model-filter button.active {
+      background: #dbe9ff;
+      border-color: rgba(36,89,230,0.35);
+      color: var(--blue);
     }
     .legend span::before {
       content: "";
@@ -357,6 +388,7 @@ DASHBOARD_HTML = """<!doctype html>
           <span style="--dot: var(--red)">费用</span>
         </div>
       </div>
+      <div class="model-filter" id="modelFilter"></div>
       <div id="trendChart" class="empty-chart">暂无趋势数据</div>
     </section>
 
@@ -374,14 +406,16 @@ DASHBOARD_HTML = """<!doctype html>
   </main>
   <script>
     let currentRange = 'day';
+    const selectedModels = new Set();
     const fmt = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 });
     const unitFmt = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 });
-    const moneyFmt = new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+    const moneyFmt = new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const text = (id, value) => { document.getElementById(id).textContent = value; };
     const setMetric = (id, value, title) => {
       const element = document.getElementById(id);
       element.textContent = value;
       element.title = title || value;
+      element.style.fontSize = value.length >= 9 ? '34px' : value.length >= 7 ? '38px' : '';
     };
     const percent = value => `${Math.round(value * 100)}%`;
     const compactNumber = value => {
@@ -428,6 +462,34 @@ DASHBOARD_HTML = """<!doctype html>
         </div>
       `).join('');
     };
+    const renderModelFilter = models => {
+      const filter = document.getElementById('modelFilter');
+      const entries = Object.entries(models)
+        .sort((a, b) => b[1].total_tokens - a[1].total_tokens);
+      if (!entries.length) {
+        filter.innerHTML = '';
+        selectedModels.clear();
+        return;
+      }
+      const allActive = selectedModels.size === 0 ? ' active' : '';
+      filter.innerHTML = `<button data-model="__all" class="${allActive}">全部模型</button>` + entries.map(([model]) => {
+        const active = selectedModels.has(model) ? ' active' : '';
+        return `<button data-model="${escapeHtml(model)}" class="${active}" title="${escapeHtml(model)}">${escapeHtml(model)}</button>`;
+      }).join('');
+      filter.querySelectorAll('[data-model]').forEach(button => {
+        button.addEventListener('click', () => {
+          const model = button.dataset.model;
+          if (model === '__all') {
+            selectedModels.clear();
+          } else if (selectedModels.has(model)) {
+            selectedModels.delete(model);
+          } else {
+            selectedModels.add(model);
+          }
+          refresh();
+        });
+      });
+    };
     const linePath = (points, key, width, height, pad, maxValue) => {
       if (points.length < 2 || maxValue <= 0) return '';
       return points.map((point, index) => {
@@ -468,9 +530,15 @@ DASHBOARD_HTML = """<!doctype html>
     };
 
     async function refresh() {
+      const modelParams = [...selectedModels]
+        .map(model => `model=${encodeURIComponent(model)}`)
+        .join('&');
+      const trendQuery = modelParams
+        ? `range=${currentRange}&${modelParams}`
+        : `range=${currentRange}`;
       const [res, trendRes] = await Promise.all([
         fetch(`/api/summary?range=${currentRange}`, { cache: 'no-store' }),
-        fetch(`/api/trends?range=${currentRange}`, { cache: 'no-store' }),
+        fetch(`/api/trends?${trendQuery}`, { cache: 'no-store' }),
       ]);
       const data = await res.json();
       const trendData = await trendRes.json();
@@ -492,6 +560,7 @@ DASHBOARD_HTML = """<!doctype html>
       text('costSub', `API ${u.cost.billable_models} / 套餐 ${u.cost.token_plan_models} / 未计价 ${u.cost.unknown_models}`);
       document.getElementById('routes').innerHTML = rows(Object.entries(p.routes));
       document.getElementById('models').innerHTML = modelRows(u.models);
+      renderModelFilter(u.models);
       renderTrendChart(trendData.points);
       text('status', `最后刷新 ${new Date().toLocaleTimeString()}`);
     }

@@ -354,6 +354,44 @@ class StatsStoreTests(unittest.TestCase):
         self.assertEqual(point["total_tokens"], 1_000_000)
         self.assertAlmostEqual(point["estimated_cost"], 1.0)
 
+    def test_trends_can_filter_multiple_models(self):
+        tmp_path = self.enterContext(TemporaryDirectoryPath())
+        store = StatsStore(tmp_path / "stats.db")
+
+        for model, tokens in (
+            ("deepseek-v4-flash", 1_000_000),
+            ("deepseek-v4-pro", 2_000_000),
+            ("MiniMax-M2.7-highspeed", 3_000_000),
+        ):
+            store.upsert_usage_event(
+                UsageEvent(
+                    source_file=f"{model}.jsonl",
+                    source_line=1,
+                    timestamp="2026-05-10T01:30:00+00:00",
+                    session_id=model,
+                    model=model,
+                    input_tokens=tokens,
+                    output_tokens=0,
+                    cache_read_input_tokens=0,
+                    cache_creation_input_tokens=0,
+                    web_search_requests=0,
+                    web_fetch_requests=0,
+                    service_tier="standard",
+                    speed="fast",
+                )
+            )
+
+        trends = store.get_trends(
+            "day",
+            now="2026-05-10T12:00:00+00:00",
+            models=["deepseek-v4-flash", "deepseek-v4-pro"],
+        )
+
+        self.assertEqual(trends["models"], ["deepseek-v4-flash", "deepseek-v4-pro"])
+        self.assertEqual(len(trends["points"]), 1)
+        self.assertEqual(trends["points"][0]["total_tokens"], 3_000_000)
+        self.assertAlmostEqual(trends["points"][0]["estimated_cost"], 7.0)
+
 
 class TemporaryDirectoryPath:
     def __enter__(self):
