@@ -189,7 +189,8 @@ DASHBOARD_HTML = """<!doctype html>
       display: grid;
       gap: 18px;
     }
-    .layout-widget {
+    .layout-widget,
+    [data-widget] {
       position: relative;
     }
     .layout-root > .alerts-panel,
@@ -216,11 +217,11 @@ DASHBOARD_HTML = """<!doctype html>
       padding: 6px 10px;
       box-shadow: 0 8px 18px rgba(18, 24, 38, 0.08);
     }
-    main.layout-editing .layout-widget {
+    main.layout-editing [data-widget] {
       outline: 2px dashed rgba(36,89,230,0.28);
       outline-offset: 5px;
     }
-    main.layout-editing .layout-widget.dragging {
+    main.layout-editing [data-widget].dragging {
       opacity: 0.55;
     }
     main.layout-editing .drag-handle {
@@ -629,8 +630,392 @@ DASHBOARD_HTML = """<!doctype html>
       font-weight: 750;
       padding-top: 10px;
     }
+    .topbar {
+      height: 64px;
+      margin: 0;
+      padding: 0 28px;
+      border-bottom: 1px solid #e7ebf2;
+      background: rgba(255,255,255,0.96);
+    }
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      border: 2px solid #8a92a3;
+      border-radius: 10px;
+      color: #323946;
+      font-size: 18px;
+      font-weight: 950;
+      line-height: 1;
+    }
+    .topbar .brand {
+      font-size: 20px;
+      gap: 12px;
+    }
+    .topbar .shell-status {
+      flex: 1;
+      justify-content: flex-start;
+      margin-left: 28px;
+    }
+    .top-actions {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 750;
+      white-space: nowrap;
+    }
+    .refresh-dot {
+      color: #70798a;
+      font-size: 18px;
+      line-height: 1;
+    }
+    .auto-select {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: white;
+      color: #344154;
+      font: inherit;
+      font-weight: 800;
+      padding: 9px 12px;
+    }
+    .theme-toggle {
+      border: 0;
+      background: transparent;
+      color: #344154;
+      cursor: pointer;
+      font-size: 24px;
+      line-height: 1;
+      padding: 4px;
+    }
+    .tab-nav {
+      display: flex;
+      height: 48px;
+      gap: 22px;
+      align-items: stretch;
+      border-bottom: 1px solid #e7ebf2;
+      background: rgba(255,255,255,0.96);
+      padding: 0 28px;
+    }
+    .tab-nav .tab-button {
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      color: #5d6472;
+      padding: 0 14px;
+      position: relative;
+      font-size: 14px;
+    }
+    .tab-nav .tab-button.active {
+      background: transparent;
+      box-shadow: none;
+      color: var(--blue);
+    }
+    .tab-nav .tab-button.active::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: 3px;
+      border-radius: 999px 999px 0 0;
+      background: var(--blue);
+    }
+    body {
+      background: #f7f8fb;
+    }
+    main {
+      width: 100%;
+      min-height: 100vh;
+      margin: 0;
+      border: 0;
+      border-radius: 0;
+      background: #f7f8fb;
+      box-shadow: none;
+      padding: 0;
+    }
+    .console-content {
+      padding: 18px 28px 30px;
+    }
+    .health-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      min-height: 52px;
+      border: 1px solid #cbe9d6;
+      border-radius: 7px;
+      background: linear-gradient(90deg, #f3fbf6, #f8fdf9);
+      padding: 0 18px;
+      margin-bottom: 16px;
+    }
+    .health-banner-main {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+    .health-dot {
+      display: grid;
+      place-items: center;
+      width: 22px;
+      height: 22px;
+      border-radius: 999px;
+      background: #2ca95f;
+      color: white;
+      font-weight: 950;
+      line-height: 1;
+    }
+    .health-title {
+      color: #279356;
+      font-size: 16px;
+      font-weight: 950;
+    }
+    .health-subtitle {
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 750;
+    }
+    .health-link {
+      border: 0;
+      background: transparent;
+      color: #2a9b5b;
+      cursor: pointer;
+      font: inherit;
+      font-weight: 900;
+      white-space: nowrap;
+    }
+    .grid {
+      grid-template-columns: repeat(5, minmax(180px, 1fr));
+      gap: 14px;
+    }
+    .metric-card {
+      display: grid;
+      grid-template-columns: 50px minmax(0, 1fr);
+      column-gap: 16px;
+      min-height: 118px;
+      border: 1px solid #e3e8f0;
+      border-top: 1px solid #e3e8f0;
+      border-radius: 7px;
+      background: white;
+      padding: 20px;
+    }
+    .metric-icon {
+      display: grid;
+      place-items: center;
+      width: 48px;
+      height: 48px;
+      border-radius: 16px;
+      background: var(--accent);
+      color: white;
+      font-size: 24px;
+      font-weight: 950;
+    }
+    .metric-card .label {
+      color: #2e3544;
+      font-size: 13px;
+      margin-bottom: 6px;
+    }
+    .metric-card .value {
+      font-size: 27px;
+      margin-bottom: 7px;
+    }
+    .metric-card .sub {
+      font-size: 12px;
+    }
+    .metric-card .metric-change {
+      color: #2ca95f;
+      font-weight: 900;
+      margin-left: 8px;
+    }
+    .metric-card.cost .metric-change {
+      color: var(--red);
+    }
+    .overview-main {
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(430px, 0.9fr);
+      gap: 14px;
+      margin-top: 16px;
+    }
+    .trend-panel,
+    .table,
+    .recent-panel {
+      border-radius: 7px;
+      border-color: #e3e8f0;
+      background: white;
+      box-shadow: none;
+    }
+    .trend-panel {
+      margin-top: 0;
+      min-height: 334px;
+    }
+    .trend-head {
+      margin-bottom: 8px;
+    }
+    .trend-actions {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px;
+      justify-content: flex-end;
+    }
+    .trend-head p {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 750;
+    }
+    .time-window {
+      border: 1px solid #dfe5ee;
+      border-radius: 7px;
+      background: white;
+      color: #344154;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 850;
+      padding: 8px 10px;
+    }
+    .provider-table,
+    .data-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    .provider-table th,
+    .provider-table td,
+    .data-table th,
+    .data-table td {
+      border-top: 1px solid #edf1f7;
+      padding: 11px 10px;
+      text-align: left;
+      vertical-align: middle;
+    }
+    .provider-table th,
+    .data-table th {
+      color: #697386;
+      font-weight: 900;
+    }
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 950;
+      padding: 4px 9px;
+      white-space: nowrap;
+    }
+    .status-badge.good {
+      background: #def7ed;
+      color: var(--green);
+    }
+    .status-badge.warn {
+      background: #fff0d8;
+      color: var(--orange);
+    }
+    .status-badge.bad {
+      background: #ffe4e8;
+      color: var(--red);
+    }
+    .table-empty {
+      border-top: 1px solid #edf1f7;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 800;
+      padding: 18px 0 4px;
+    }
+    .provider-name {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 950;
+    }
+    .provider-logo {
+      display: grid;
+      place-items: center;
+      width: 26px;
+      height: 26px;
+      border-radius: 8px;
+      color: white;
+      font-size: 12px;
+      font-weight: 950;
+    }
+    .sparkline {
+      width: 74px;
+      height: 18px;
+      vertical-align: middle;
+    }
+    .bottom-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+      gap: 14px;
+      margin-top: 14px;
+    }
+    .table-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+    .table-head h2,
+    .trend-head h2 {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 950;
+    }
+    .table-link {
+      color: var(--blue);
+      font-size: 13px;
+      font-weight: 900;
+      text-decoration: none;
+    }
+    .table-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    body.dark-mode {
+      --ink: #e7ecf6;
+      --muted: #aab4c5;
+      --line: #273244;
+      --panel: #111827;
+      --wash: #1b2535;
+      background: #0b1019;
+    }
+    body.dark-mode main {
+      background: #0b1019;
+    }
+    body.dark-mode .topbar,
+    body.dark-mode .tab-nav,
+    body.dark-mode .trend-panel,
+    body.dark-mode .table,
+    body.dark-mode .metric-card {
+      background: #111827;
+    }
+    body.dark-mode .auto-select,
+    body.dark-mode .time-window {
+      background: #101722;
+      color: var(--ink);
+    }
+    @media (max-width: 1100px) {
+      .overview-main,
+      .bottom-grid {
+        grid-template-columns: 1fr;
+      }
+      .topbar {
+        height: auto;
+        align-items: flex-start;
+        padding: 14px 18px;
+        flex-wrap: wrap;
+      }
+      .topbar .shell-status {
+        margin-left: 0;
+      }
+    }
     @media (max-width: 920px) {
-      main { width: calc(100vw - 24px); padding: 18px; border-radius: 20px; }
+      main { width: 100%; padding: 0; border-radius: 0; }
       header { align-items: flex-start; flex-direction: column; }
       .grid, .details, .overview-split { grid-template-columns: 1fr; }
       .model-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -645,32 +1030,30 @@ DASHBOARD_HTML = """<!doctype html>
 </head>
 <body>
   <main>
-    <header>
+    <header class="topbar">
       <div class="brand">
-        <svg class="pulse" viewBox="0 0 32 32" aria-hidden="true">
-          <path d="M3 17h6l3-11 6 22 4-11h7" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
+        <span class="brand-mark" aria-hidden="true">⬢</span>
         <span>Smart Proxy Console</span>
       </div>
       <div class="shell-status" aria-label="service status">
         <span class="status-chip good" id="proxyChip">Proxy 127.0.0.1:8889</span>
         <span class="status-chip good" id="dashboardChip">Dashboard 127.0.0.1:8890</span>
-        <span class="status-chip" id="upstreamChip">Upstream detecting</span>
+        <span class="status-chip" id="upstreamChip" hidden>Upstream detecting</span>
       </div>
-      <div class="controls">
-        <div class="segment" role="group" aria-label="range">
-          <button data-range="day" class="active">日</button>
-          <button data-range="week">周</button>
-          <button data-range="month">月</button>
-          <button data-range="all">全</button>
-        </div>
-        <button class="layout-action" id="layoutToggle" aria-pressed="false">编辑布局</button>
-        <button class="layout-action" id="resetLayout" hidden>恢复默认</button>
-        <button class="danger" id="clearProxy">清除统计</button>
+      <div class="top-actions">
+        <span class="refresh-dot" aria-hidden="true">⟳</span>
+        <span id="lastRefreshAt">刚刚刷新</span>
+        <select class="auto-select" id="autoRefresh" aria-label="自动刷新">
+          <option value="5000">5 秒</option>
+          <option value="10000">10 秒</option>
+          <option value="30000">30 秒</option>
+          <option value="0">关闭</option>
+        </select>
+        <button class="theme-toggle" id="themeToggle" type="button" aria-label="切换主题">◐</button>
       </div>
     </header>
 
-    <nav class="tab-bar" aria-label="dashboard sections">
+    <nav class="tab-nav" aria-label="dashboard sections">
       <button class="tab-button active" data-tab-target="overview">总览</button>
       <button class="tab-button" data-tab-target="providers">Providers</button>
       <button class="tab-button" data-tab-target="requests">Requests</button>
@@ -679,69 +1062,130 @@ DASHBOARD_HTML = """<!doctype html>
       <button class="tab-button" data-tab-target="doctor">Doctor</button>
     </nav>
 
+    <div class="console-content">
     <section class="tab-panel active" data-tab-panel="overview">
-    <div class="layout-root" id="layoutRoot">
-      <section class="alerts-panel clean layout-widget" id="alertsPanel" data-widget="alerts" aria-live="polite">
-        <button class="drag-handle" type="button" aria-label="拖动运行告警">拖动</button>
-        <div class="alert-title">运行告警</div>
-        <div class="alert-list" id="alertsList"></div>
-        <div class="alert-count" id="alertCount">0 条</div>
-      </section>
-
-      <section class="grid layout-widget" data-widget="kpis">
-        <button class="drag-handle" type="button" aria-label="拖动指标卡片">拖动</button>
-        <article class="card" style="--accent: var(--blue)">
-          <div class="label">总请求数</div>
-          <div class="value" id="totalRequests">0</div>
-          <div class="sub" id="requestSub">成功 0 / 失败 0</div>
-        </article>
-        <article class="card" style="--accent: var(--green)">
-          <div class="label">总 TOKEN 数</div>
-          <div class="value" id="totalTokens">0</div>
-          <div class="sub" id="tokenSub">输入 0 / 输出 0</div>
-        </article>
-        <article class="card" style="--accent: var(--violet)">
-          <div class="label">缓存 TOKEN</div>
-          <div class="value" id="cacheTokens">0</div>
-          <div class="sub" id="cacheSub">读 0 / 写 0</div>
-        </article>
-        <article class="card" style="--accent: var(--orange)">
-          <div class="label">平均建连</div>
-          <div class="value" id="avgLatency">0ms</div>
-          <div class="sub" id="successRate">成功率 0%</div>
-        </article>
-        <article class="card" style="--accent: var(--red)">
-          <div class="label">预估费用</div>
-          <div class="value" id="estimatedCost">¥0</div>
-          <div class="sub" id="costSub">API 0 / 套餐 0</div>
-        </article>
-      </section>
-
-      <section class="trend-panel layout-widget" data-widget="trend">
-        <button class="drag-handle" type="button" aria-label="拖动趋势图">拖动</button>
-        <div class="trend-head">
-          <h2>趋势图</h2>
-          <div class="legend">
-            <span style="--dot: var(--green)">Token</span>
-            <span style="--dot: var(--red)">费用</span>
+      <div class="layout-root" id="layoutRoot">
+        <section class="health-banner" id="alertsPanel" data-widget="alerts" aria-live="polite">
+          <button class="drag-handle" type="button" aria-label="拖动系统健康">拖动</button>
+          <div class="health-banner-main">
+            <span class="health-dot" aria-hidden="true">✓</span>
+            <div>
+              <div class="health-title" id="systemHealthText">系统运行正常</div>
+              <div class="health-subtitle" id="systemHealthSub">代理、Dashboard 与上游连接均处于可用状态。</div>
+            </div>
           </div>
-        </div>
-        <div class="model-filter" id="modelFilter"></div>
-        <div id="trendChart" class="empty-chart">暂无趋势数据</div>
-      </section>
-    </div>
+          <button class="health-link" type="button" data-tab-target="doctor">查看详情</button>
+          <div class="alert-list" id="alertsList" hidden></div>
+          <div class="alert-count" id="alertCount" hidden>0 条</div>
+        </section>
 
-    <div class="overview-split">
-      <section class="table">
-        <h2>Provider 健康摘要</h2>
-        <div id="providerSummary"></div>
-      </section>
-      <section class="table">
-        <h2>近期异常预览</h2>
-        <p class="panel-note">这里优先展示告警、慢建连和失败请求。完整请求流在 Requests 页签里查看。</p>
-        <div id="recentAnomalies"></div>
-      </section>
-    </div>
+        <section class="grid layout-widget" data-widget="kpis">
+          <button class="drag-handle" type="button" aria-label="拖动指标卡片">拖动</button>
+          <article class="card metric-card" style="--accent: var(--blue)">
+            <div class="metric-icon" aria-hidden="true">↗</div>
+            <div>
+              <div class="label">总请求数</div>
+              <div class="value" id="totalRequests">0</div>
+              <div class="sub" id="requestSub">较昨日 0% · 成功 0 / 失败 0</div>
+            </div>
+          </article>
+          <article class="card metric-card" style="--accent: var(--green)">
+            <div class="metric-icon" aria-hidden="true">%</div>
+            <div>
+              <div class="label">成功率</div>
+              <div class="value" id="successRateKpi">0%</div>
+              <div class="sub" id="successRate">较昨日 0% · 持续 0ms</div>
+            </div>
+          </article>
+          <article class="card metric-card" style="--accent: var(--orange)">
+            <div class="metric-icon" aria-hidden="true">⏱</div>
+            <div>
+              <div class="label">平均建连(P50)</div>
+              <div class="value" id="avgLatency">0ms</div>
+              <div class="sub" id="latencySub">较昨日 0% · 慢建连 0</div>
+            </div>
+          </article>
+          <article class="card metric-card" style="--accent: var(--red)">
+            <div class="metric-icon" aria-hidden="true">¥</div>
+            <div>
+              <div class="label">今日费用</div>
+              <div class="value" id="estimatedCost">¥0</div>
+              <div class="sub" id="costSub">较昨日 0% · API 0 / 套餐 0</div>
+            </div>
+          </article>
+          <article class="card metric-card" style="--accent: var(--violet)">
+            <div class="metric-icon" aria-hidden="true">T</div>
+            <div>
+              <div class="label">今日 Token</div>
+              <div class="value" id="totalTokens">0</div>
+              <div class="sub" id="tokenSub">较昨日 0% · 输入 0 / 输出 0</div>
+            </div>
+            <div id="cacheTokens" hidden>0</div>
+            <div id="cacheSub" hidden>读 0 / 写 0</div>
+          </article>
+        </section>
+
+        <section class="overview-main" data-widget="trend">
+          <button class="drag-handle" type="button" aria-label="拖动趋势图">拖动</button>
+          <div class="trend-panel">
+            <div class="trend-head">
+              <div>
+                <h2>请求趋势</h2>
+                <p>按时间查看请求量、Token 与费用变化</p>
+              </div>
+              <div class="trend-actions">
+                <select class="time-window" id="timeWindow" aria-label="趋势时间窗口">
+                  <option value="day">今日</option>
+                  <option value="week">近 7 天</option>
+                  <option value="month">近 30 天</option>
+                  <option value="all">全部</option>
+                </select>
+                <div class="segment" role="group" aria-label="range">
+                  <button data-range="day" class="active">日</button>
+                  <button data-range="week">周</button>
+                  <button data-range="month">月</button>
+                  <button data-range="all">全</button>
+                </div>
+                <div class="legend">
+                  <span style="--dot: var(--green)">Token</span>
+                  <span style="--dot: var(--red)">费用</span>
+                </div>
+              </div>
+            </div>
+            <div class="model-filter" id="modelFilter"></div>
+            <div id="trendChart" class="empty-chart">暂无趋势数据</div>
+          </div>
+          <section class="table provider-health-panel">
+            <div class="table-head">
+              <h2>Provider 健康状态</h2>
+              <button class="layout-action" id="layoutToggle" aria-pressed="false">编辑布局</button>
+            </div>
+            <div id="providerHealth"></div>
+            <div id="providerSummary" hidden></div>
+          </section>
+        </section>
+
+        <section class="bottom-grid layout-widget" data-widget="bottom">
+          <div class="table">
+            <div class="table-head">
+              <h2>最近异常</h2>
+              <a class="table-link" href="#" data-tab-target="requests">全部请求</a>
+            </div>
+            <div id="recentAnomaliesTable"></div>
+            <div id="recentAnomalies" hidden></div>
+          </div>
+          <div class="table">
+            <div class="table-head">
+              <h2>最近请求</h2>
+              <div class="table-actions">
+                <button class="layout-action" id="resetLayout" hidden>恢复默认</button>
+                <button class="danger" id="clearProxy">清除统计</button>
+              </div>
+            </div>
+            <div id="recentRequestsTable"></div>
+          </div>
+        </section>
+      </div>
     </section>
 
     <section class="tab-panel" data-tab-panel="providers">
@@ -802,18 +1246,21 @@ DASHBOARD_HTML = """<!doctype html>
     </section>
 
     <div class="status" id="status">等待刷新</div>
+    </div>
   </main>
   <script>
     let currentRange = 'day';
     const selectedModels = new Set();
     let layoutEditing = false;
     let draggedWidget = null;
+    let refreshTimer = null;
     const layoutStorageKey = 'smartProxyOverviewDashboardLayout.v1';
-    const defaultLayout = ['alerts', 'kpis', 'trend'];
+    const defaultLayout = ['alerts', 'kpis', 'trend', 'bottom'];
     const layoutRoot = document.getElementById('layoutRoot');
     const layoutToggle = document.getElementById('layoutToggle');
     const resetLayout = document.getElementById('resetLayout');
-    const tabButtons = [...document.querySelectorAll('[data-tab-target]')];
+    const tabButtons = [...document.querySelectorAll('.tab-nav [data-tab-target]')];
+    const tabLinks = [...document.querySelectorAll('[data-tab-target]')];
     const tabPanels = [...document.querySelectorAll('[data-tab-panel]')];
     const fmt = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 });
     const unitFmt = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 });
@@ -950,6 +1397,18 @@ DASHBOARD_HTML = """<!doctype html>
       const panel = document.getElementById('alertsPanel');
       panel.classList.toggle('clean', alerts.length === 0);
       document.getElementById('alertsList').innerHTML = alertRows(alerts);
+      const critical = alerts.some(alert => alert.severity === 'critical');
+      const warning = alerts.length > 0 && !critical;
+      const healthText = critical
+        ? '系统存在严重异常'
+        : warning
+          ? '系统需要关注'
+          : '系统运行正常';
+      const healthSub = alerts.length
+        ? alerts.slice(0, 2).map(alert => alert.message || alert.kind || '异常').join(' / ')
+        : '代理、Dashboard 与上游连接均处于可用状态。';
+      text('systemHealthText', healthText);
+      text('systemHealthSub', healthSub);
       const counts = proxy.alert_counts || { critical: 0, warning: 0 };
       document.getElementById('alertCount').textContent =
         `${alerts.length} 条 · 严重 ${counts.critical || 0} / 提醒 ${counts.warning || 0}`;
@@ -1011,6 +1470,35 @@ DASHBOARD_HTML = """<!doctype html>
         `;
       }).join('');
     };
+    const providerHealthTable = hosts => {
+      const topHosts = (hosts || []).slice(0, 6);
+      if (!topHosts.length) {
+        return '<div class="table-empty">暂无 Provider 数据</div>';
+      }
+      const rows = topHosts.map(host => {
+        const health = host.health === 'critical'
+          ? '异常'
+          : host.health === 'warning'
+            ? '观察'
+            : '正常';
+        const badgeClass = host.health === 'ok' ? 'good' : host.health === 'warning' ? 'warn' : 'bad';
+        return `
+          <tr>
+            <td><strong>${escapeHtml(host.host || '-')}</strong></td>
+            <td><span class="status-badge ${badgeClass}">${health}</span></td>
+            <td>${fmt.format(host.total_requests || 0)}</td>
+            <td>${percent(host.failure_rate || 0)}</td>
+            <td>${fmt.format(host.average_connect_latency_ms || host.average_latency_ms || 0)}ms</td>
+          </tr>
+        `;
+      }).join('');
+      return `
+        <table class="provider-table">
+          <thead><tr><th>Provider</th><th>状态</th><th>请求</th><th>失败率</th><th>建连</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+    };
     const recentRows = requests => {
       if (!requests.length) {
         return '<div class="row"><span>暂无请求</span><strong>0</strong></div>';
@@ -1047,6 +1535,66 @@ DASHBOARD_HTML = """<!doctype html>
         return '<div class="row"><span>当前范围内暂无异常请求</span><strong>OK</strong></div>';
       }
       return recentRows(anomalies);
+    };
+    const requestTableRows = requests => {
+      const items = (requests || []).slice(0, 6);
+      if (!items.length) {
+        return '<div class="table-empty">暂无请求</div>';
+      }
+      const rows = items.map(request => {
+        const when = request.started_at ? new Date(request.started_at).toLocaleTimeString() : '-';
+        const statusClass = request.success ? 'good' : 'bad';
+        const statusText = request.success ? '成功' : '失败';
+        return `
+          <tr>
+            <td>${escapeHtml(when)}</td>
+            <td><strong>${escapeHtml(request.host || '-')}</strong></td>
+            <td>${escapeHtml(request.method || '-')}</td>
+            <td>${escapeHtml(routeText(request.route || '-'))}</td>
+            <td><span class="status-badge ${statusClass}">${statusText}</span></td>
+            <td>${fmt.format(request.duration_ms || request.latency_ms || 0)}ms</td>
+          </tr>
+        `;
+      }).join('');
+      return `
+        <table class="data-table">
+          <thead><tr><th>时间</th><th>Host</th><th>方法</th><th>路由</th><th>状态</th><th>耗时</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+    };
+    const anomalyTableRows = (requests, alerts) => {
+      const requestAnomalies = (requests || []).filter(request => !request.success || request.slow).slice(0, 5);
+      const alertRows = (alerts || []).slice(0, 3).map(alert => `
+        <tr>
+          <td>${escapeHtml(alert.severity || 'warning')}</td>
+          <td><strong>${escapeHtml(alert.kind || '告警')}</strong></td>
+          <td>${escapeHtml(alert.message || '-')}</td>
+          <td>-</td>
+        </tr>
+      `);
+      const requestRows = requestAnomalies.map(request => {
+        const kind = request.success ? '慢请求' : '失败请求';
+        const when = request.started_at ? new Date(request.started_at).toLocaleTimeString() : '-';
+        return `
+          <tr>
+            <td>${escapeHtml(kind)}</td>
+            <td><strong>${escapeHtml(request.host || '-')}</strong></td>
+            <td>${escapeHtml(request.error || routeText(request.route || '-'))}</td>
+            <td>${escapeHtml(when)}</td>
+          </tr>
+        `;
+      });
+      const rows = [...alertRows, ...requestRows].join('');
+      if (!rows) {
+        return '<div class="table-empty">当前范围内暂无异常请求</div>';
+      }
+      return `
+        <table class="data-table">
+          <thead><tr><th>类型</th><th>对象</th><th>说明</th><th>时间</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
     };
     const runtimeRows = status => {
       const proxyText = status.proxy_enabled === true
@@ -1171,9 +1719,9 @@ DASHBOARD_HTML = """<!doctype html>
       const p = data.proxy;
       const u = data.usage;
       setMetric('totalRequests', fmt.format(p.total_requests));
-      text('requestSub', `成功 ${fmt.format(p.successful_requests)} / 失败 ${fmt.format(p.failed_requests)}`);
+      text('requestSub', `较昨日 0% · 成功 ${fmt.format(p.successful_requests)} / 失败 ${fmt.format(p.failed_requests)}`);
       setMetric('totalTokens', compactNumber(u.total_tokens), fmt.format(u.total_tokens));
-      text('tokenSub', `输入 ${compactNumber(u.input_tokens)} / 输出 ${compactNumber(u.output_tokens)}`);
+      text('tokenSub', `较昨日 0% · 输入 ${compactNumber(u.input_tokens)} / 输出 ${compactNumber(u.output_tokens)}`);
       setMetric(
         'cacheTokens',
         compactNumber(u.cache_read_input_tokens + u.cache_creation_input_tokens),
@@ -1181,21 +1729,28 @@ DASHBOARD_HTML = """<!doctype html>
       );
       text('cacheSub', `读 ${compactNumber(u.cache_read_input_tokens)} / 写 ${compactNumber(u.cache_creation_input_tokens)}`);
       setMetric('avgLatency', `${fmt.format(p.average_connect_latency_ms || p.average_latency_ms || 0)}ms`);
-      text('successRate', `成功率 ${percent(p.success_rate)} / 持续 ${fmt.format(p.average_duration_ms || 0)}ms`);
+      setMetric('successRateKpi', percent(p.success_rate));
+      text('successRate', `较昨日 0% · 持续 ${fmt.format(p.average_duration_ms || 0)}ms`);
+      text('latencySub', `较昨日 0% · 慢建连 ${fmt.format(p.slow_requests || 0)}`);
       setMetric('estimatedCost', money(u.cost.total), `${money(u.cost.total)} CNY`);
-      text('costSub', `API ${u.cost.billable_models} / 套餐 ${u.cost.token_plan_models} / 未计价 ${u.cost.unknown_models}`);
+      text('costSub', `较昨日 0% · API ${u.cost.billable_models} / 套餐 ${u.cost.token_plan_models} / 未计价 ${u.cost.unknown_models}`);
       renderAlerts(p);
       document.getElementById('routes').innerHTML = rows(Object.entries(p.routes));
       document.getElementById('models').innerHTML = modelRows(u.models);
       document.getElementById('hosts').innerHTML = hostRows(p.hosts || []);
       document.getElementById('providerSummary').innerHTML = providerSummaryRows(p.hosts || []);
+      document.getElementById('providerHealth').innerHTML = providerHealthTable(p.hosts || []);
       document.getElementById('recentRequests').innerHTML = recentRows(recentData.requests || []);
       document.getElementById('recentAnomalies').innerHTML = anomalyRows(recentData.requests || []);
+      document.getElementById('recentRequestsTable').innerHTML = requestTableRows(recentData.requests || []);
+      document.getElementById('recentAnomaliesTable').innerHTML = anomalyTableRows(recentData.requests || [], p.alerts || []);
       document.getElementById('runtimeStatus').innerHTML = runtimeRows(runtimeData || {});
       updateShellStatus(runtimeData || {});
       renderModelFilter(u.models);
       renderTrendChart(trendData.points);
-      text('status', `最后刷新 ${new Date().toLocaleTimeString()}`);
+      const refreshedAt = new Date().toLocaleTimeString();
+      text('status', `最后刷新 ${refreshedAt}`);
+      text('lastRefreshAt', `最后刷新 ${refreshedAt}`);
     }
 
     document.querySelectorAll('[data-range]').forEach(button => {
@@ -1203,15 +1758,26 @@ DASHBOARD_HTML = """<!doctype html>
         document.querySelectorAll('[data-range]').forEach(b => b.classList.remove('active'));
         button.classList.add('active');
         currentRange = button.dataset.range;
+        document.getElementById('timeWindow').value = currentRange;
         refresh();
       });
+    });
+    document.getElementById('timeWindow').addEventListener('change', event => {
+      currentRange = event.target.value;
+      document.querySelectorAll('[data-range]').forEach(button => {
+        button.classList.toggle('active', button.dataset.range === currentRange);
+      });
+      refresh();
     });
     document.getElementById('clearProxy').addEventListener('click', async () => {
       await fetch('/api/clear-proxy-stats', { method: 'POST' });
       refresh();
     });
-    tabButtons.forEach(button => {
-      button.addEventListener('click', () => switchTab(button.dataset.tabTarget));
+    tabLinks.forEach(button => {
+      button.addEventListener('click', event => {
+        event.preventDefault();
+        switchTab(button.dataset.tabTarget);
+      });
     });
     layoutToggle.addEventListener('click', () => {
       setLayoutEditing(!layoutEditing);
@@ -1249,7 +1815,21 @@ DASHBOARD_HTML = """<!doctype html>
     });
     loadLayout();
     refresh();
-    setInterval(refresh, 5000);
+    const scheduleRefresh = () => {
+      if (refreshTimer) {
+        clearInterval(refreshTimer);
+        refreshTimer = null;
+      }
+      const interval = Number(document.getElementById('autoRefresh').value || 0);
+      if (interval > 0) {
+        refreshTimer = setInterval(refresh, interval);
+      }
+    };
+    document.getElementById('autoRefresh').addEventListener('change', scheduleRefresh);
+    document.getElementById('themeToggle').addEventListener('click', () => {
+      document.body.classList.toggle('dark-mode');
+    });
+    scheduleRefresh();
   </script>
 </body>
 </html>"""

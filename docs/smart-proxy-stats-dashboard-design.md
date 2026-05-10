@@ -316,7 +316,19 @@ can map to `day`, `week`, and `month`.
 
 V1 layout should be practical rather than decorative:
 
-- The dashboard uses a console-style top-level tab shell:
+- The dashboard uses the approved flat operations-console reference layout:
+  - full-width topbar without a large rounded outer container
+  - brand mark plus `Smart Proxy Console`
+  - top status chips for proxy and dashboard ports
+  - last refresh, auto-refresh selector, and theme toggle in the top-right
+  - underline-style tabs rather than pill tabs
+  - green system-health banner above the KPI row
+  - 5 KPI cards for total requests, success rate, connect latency, daily cost,
+    and daily tokens
+  - overview grid with request trend on the left and Provider health on the
+    right
+  - bottom grid for recent anomalies and recent requests
+- The top-level tab shell is:
   - Overview
   - Providers
   - Requests

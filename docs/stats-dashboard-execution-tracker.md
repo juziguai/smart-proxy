@@ -31,6 +31,7 @@ Status legend:
 | 17 | Done | Editable dashboard layout | Dashboard adds an edit-layout toggle, module drag sorting, local browser persistence, and restore-default action | Server HTML tests cover layout controls, widget ids, localStorage persistence hooks, and drag handlers |
 | 18 | Done | Telemetry semantics hardening | Split connect latency from total tunnel/request duration so long-lived CONNECT streams no longer trigger slow-request alerts; legacy no-error CONNECT failures no longer trigger failure alerts | Full suite passes; live `/api/summary` reports zero alerts with historical DeepSeek tunnel rows retained as raw stats |
 | 19 | Done | Console tab shell redesign | Dashboard is reorganized into Overview, Providers, Requests, Usage & Cost, Whitelist, and Doctor tabs while preserving existing metrics and overview layout editing | Server HTML tests cover tab shell, status chips, domain tab placement, and existing dashboard render hooks |
+| 20 | Done | Reference console visual alignment | Dashboard shell now matches the approved reference: flat full-width topbar, underline tabs, green health banner, 5 KPI cards, trend + Provider health grid, and bottom anomaly/request tables | Added reference-layout HTML test; full test suite passes; live dashboard screenshot captured at `logs/dashboard-reference-match.png` |
 
 ## Current Decision Log
 
@@ -49,6 +50,7 @@ Status legend:
 | Alert thresholds | Slow connect `>= 3000ms`; Host warning failure rate `>= 10%`; Host critical failure rate `>= 50%` |
 | Layout persistence | Dashboard module order is stored in browser `localStorage`; no backend schema change |
 | Dashboard information architecture | Top-level tabs are Overview, Providers, Requests, Usage & Cost, Whitelist, and Doctor |
+| Dashboard visual style | Flat full-width operations console matching the approved reference image: no rounded outer shell, dense card grid, health banner, table-first diagnostics |
 
 ## Candidate Backlog
 

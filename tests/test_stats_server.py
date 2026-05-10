@@ -204,6 +204,33 @@ class StatsServerTests(unittest.TestCase):
         self.assertIn('data-tab-target="doctor"', html)
         self.assertIn("switchTab", html)
 
+    def test_dashboard_matches_reference_console_layout(self):
+        with TemporaryDirectory() as temp_dir:
+            store = StatsStore(f"{temp_dir}/stats.db")
+
+            status, _headers, body = handle_stats_request(
+                "GET",
+                urlparse("/"),
+                store,
+            )
+
+        html = body.decode("utf-8")
+        self.assertEqual(status, 200)
+        self.assertIn('class="topbar"', html)
+        self.assertIn('class="brand-mark"', html)
+        self.assertIn('class="tab-nav"', html)
+        self.assertIn('class="health-banner"', html)
+        self.assertIn('id="systemHealthText"', html)
+        self.assertIn('class="metric-icon"', html)
+        self.assertIn("较昨日", html)
+        self.assertIn('id="timeWindow"', html)
+        self.assertIn('id="autoRefresh"', html)
+        self.assertIn('id="themeToggle"', html)
+        self.assertIn('class="overview-main"', html)
+        self.assertIn('id="providerHealth"', html)
+        self.assertIn('id="recentAnomaliesTable"', html)
+        self.assertIn('id="recentRequestsTable"', html)
+
     def test_dashboard_places_existing_widgets_in_domain_tabs(self):
         with TemporaryDirectory() as temp_dir:
             store = StatsStore(f"{temp_dir}/stats.db")
