@@ -243,6 +243,21 @@ class StatsServerTests(unittest.TestCase):
         self.assertIn("alertsPanel", html)
         self.assertIn("slow-request", html)
 
+    def test_dashboard_places_proxy_diagnostics_above_trend_chart(self):
+        with TemporaryDirectory() as temp_dir:
+            store = StatsStore(f"{temp_dir}/stats.db")
+
+            status, _headers, body = handle_stats_request(
+                "GET",
+                urlparse("/"),
+                store,
+            )
+
+        html = body.decode("utf-8")
+        self.assertEqual(status, 200)
+        self.assertLess(html.index('id="runtimeStatus"'), html.index('id="trendChart"'))
+        self.assertLess(html.index('id="hosts"'), html.index('id="trendChart"'))
+
     def test_build_stats_response_encodes_json(self):
         status, headers, body = build_stats_response(201, {"ok": True})
 

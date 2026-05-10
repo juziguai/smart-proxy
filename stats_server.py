@@ -560,6 +560,17 @@ DASHBOARD_HTML = """<!doctype html>
       </article>
     </section>
 
+    <section class="details diagnostics">
+      <div class="table">
+        <h2>代理状态</h2>
+        <div class="runtime-list" id="runtimeStatus"></div>
+      </div>
+      <div class="table">
+        <h2>Host 统计</h2>
+        <div id="hosts"></div>
+      </div>
+    </section>
+
     <section class="trend-panel">
       <div class="trend-head">
         <h2>趋势图</h2>
@@ -580,17 +591,6 @@ DASHBOARD_HTML = """<!doctype html>
       <div class="table">
         <h2>模型拆分</h2>
         <div id="models"></div>
-      </div>
-    </section>
-
-    <section class="details diagnostics">
-      <div class="table">
-        <h2>代理状态</h2>
-        <div class="runtime-list" id="runtimeStatus"></div>
-      </div>
-      <div class="table">
-        <h2>Host 统计</h2>
-        <div id="hosts"></div>
       </div>
     </section>
 
