@@ -258,6 +258,33 @@ class StatsServerTests(unittest.TestCase):
         self.assertLess(html.index('id="runtimeStatus"'), html.index('id="trendChart"'))
         self.assertLess(html.index('id="hosts"'), html.index('id="trendChart"'))
 
+    def test_dashboard_supports_editable_local_layout(self):
+        with TemporaryDirectory() as temp_dir:
+            store = StatsStore(f"{temp_dir}/stats.db")
+
+            status, _headers, body = handle_stats_request(
+                "GET",
+                urlparse("/"),
+                store,
+            )
+
+        html = body.decode("utf-8")
+        self.assertEqual(status, 200)
+        self.assertIn('id="layoutToggle"', html)
+        self.assertIn('id="resetLayout"', html)
+        self.assertIn('id="layoutRoot"', html)
+        self.assertIn('data-widget="alerts"', html)
+        self.assertIn('data-widget="kpis"', html)
+        self.assertIn('data-widget="diagnostics"', html)
+        self.assertIn('data-widget="trend"', html)
+        self.assertIn('data-widget="details"', html)
+        self.assertIn('data-widget="recent"', html)
+        self.assertIn("layoutStorageKey", html)
+        self.assertIn("localStorage.setItem(layoutStorageKey", html)
+        self.assertIn("setLayoutEditing", html)
+        self.assertIn("dragstart", html)
+        self.assertIn("restoreDefaultLayout", html)
+
     def test_build_stats_response_encodes_json(self):
         status, headers, body = build_stats_response(201, {"ok": True})
 

@@ -146,7 +146,7 @@ DASHBOARD_HTML = """<!doctype html>
       padding: 4px;
       background: var(--wash);
     }
-    .segment button, .danger {
+    .segment button, .danger, .layout-action {
       border: 0;
       font: inherit;
       font-weight: 800;
@@ -169,6 +169,62 @@ DASHBOARD_HTML = """<!doctype html>
       border-radius: 14px;
       color: white;
       background: var(--red);
+    }
+    .layout-action {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      color: #29416d;
+      background: var(--wash);
+      padding: 12px 14px;
+    }
+    .layout-action.active {
+      background: #dbe9ff;
+      border-color: rgba(36,89,230,0.35);
+      color: var(--blue);
+    }
+    .layout-action[hidden] {
+      display: none;
+    }
+    .layout-root {
+      display: grid;
+      gap: 18px;
+    }
+    .layout-widget {
+      position: relative;
+    }
+    .layout-root > .alerts-panel,
+    .layout-root > .details,
+    .layout-root > .trend-panel,
+    .layout-root > .recent-panel {
+      margin-top: 0;
+      margin-bottom: 0;
+    }
+    .drag-handle {
+      display: none;
+      position: absolute;
+      right: 14px;
+      top: 12px;
+      z-index: 3;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: white;
+      color: #29416d;
+      cursor: grab;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 900;
+      padding: 6px 10px;
+      box-shadow: 0 8px 18px rgba(18, 24, 38, 0.08);
+    }
+    main.layout-editing .layout-widget {
+      outline: 2px dashed rgba(36,89,230,0.28);
+      outline-offset: 5px;
+    }
+    main.layout-editing .layout-widget.dragging {
+      opacity: 0.55;
+    }
+    main.layout-editing .drag-handle {
+      display: inline-flex;
     }
     .grid {
       display: grid;
@@ -522,91 +578,158 @@ DASHBOARD_HTML = """<!doctype html>
           <button data-range="month">月</button>
           <button data-range="all">全</button>
         </div>
+        <button class="layout-action" id="layoutToggle" aria-pressed="false">编辑布局</button>
+        <button class="layout-action" id="resetLayout" hidden>恢复默认</button>
         <button class="danger" id="clearProxy">清除统计</button>
       </div>
     </header>
 
-    <section class="alerts-panel clean" id="alertsPanel" aria-live="polite">
-      <div class="alert-title">运行告警</div>
-      <div class="alert-list" id="alertsList"></div>
-      <div class="alert-count" id="alertCount">0 条</div>
-    </section>
+    <div class="layout-root" id="layoutRoot">
+      <section class="alerts-panel clean layout-widget" id="alertsPanel" data-widget="alerts" aria-live="polite">
+        <button class="drag-handle" type="button" aria-label="拖动运行告警">拖动</button>
+        <div class="alert-title">运行告警</div>
+        <div class="alert-list" id="alertsList"></div>
+        <div class="alert-count" id="alertCount">0 条</div>
+      </section>
 
-    <section class="grid">
-      <article class="card" style="--accent: var(--blue)">
-        <div class="label">总请求数</div>
-        <div class="value" id="totalRequests">0</div>
-        <div class="sub" id="requestSub">成功 0 / 失败 0</div>
-      </article>
-      <article class="card" style="--accent: var(--green)">
-        <div class="label">总 TOKEN 数</div>
-        <div class="value" id="totalTokens">0</div>
-        <div class="sub" id="tokenSub">输入 0 / 输出 0</div>
-      </article>
-      <article class="card" style="--accent: var(--violet)">
-        <div class="label">缓存 TOKEN</div>
-        <div class="value" id="cacheTokens">0</div>
-        <div class="sub" id="cacheSub">读 0 / 写 0</div>
-      </article>
-      <article class="card" style="--accent: var(--orange)">
-        <div class="label">平均延迟</div>
-        <div class="value" id="avgLatency">0ms</div>
-        <div class="sub" id="successRate">成功率 0%</div>
-      </article>
-      <article class="card" style="--accent: var(--red)">
-        <div class="label">预估费用</div>
-        <div class="value" id="estimatedCost">¥0</div>
-        <div class="sub" id="costSub">API 0 / 套餐 0</div>
-      </article>
-    </section>
+      <section class="grid layout-widget" data-widget="kpis">
+        <button class="drag-handle" type="button" aria-label="拖动指标卡片">拖动</button>
+        <article class="card" style="--accent: var(--blue)">
+          <div class="label">总请求数</div>
+          <div class="value" id="totalRequests">0</div>
+          <div class="sub" id="requestSub">成功 0 / 失败 0</div>
+        </article>
+        <article class="card" style="--accent: var(--green)">
+          <div class="label">总 TOKEN 数</div>
+          <div class="value" id="totalTokens">0</div>
+          <div class="sub" id="tokenSub">输入 0 / 输出 0</div>
+        </article>
+        <article class="card" style="--accent: var(--violet)">
+          <div class="label">缓存 TOKEN</div>
+          <div class="value" id="cacheTokens">0</div>
+          <div class="sub" id="cacheSub">读 0 / 写 0</div>
+        </article>
+        <article class="card" style="--accent: var(--orange)">
+          <div class="label">平均延迟</div>
+          <div class="value" id="avgLatency">0ms</div>
+          <div class="sub" id="successRate">成功率 0%</div>
+        </article>
+        <article class="card" style="--accent: var(--red)">
+          <div class="label">预估费用</div>
+          <div class="value" id="estimatedCost">¥0</div>
+          <div class="sub" id="costSub">API 0 / 套餐 0</div>
+        </article>
+      </section>
 
-    <section class="details diagnostics">
-      <div class="table">
-        <h2>代理状态</h2>
-        <div class="runtime-list" id="runtimeStatus"></div>
-      </div>
-      <div class="table">
-        <h2>Host 统计</h2>
-        <div id="hosts"></div>
-      </div>
-    </section>
-
-    <section class="trend-panel">
-      <div class="trend-head">
-        <h2>趋势图</h2>
-        <div class="legend">
-          <span style="--dot: var(--green)">Token</span>
-          <span style="--dot: var(--red)">费用</span>
+      <section class="details diagnostics layout-widget" data-widget="diagnostics">
+        <button class="drag-handle" type="button" aria-label="拖动代理诊断">拖动</button>
+        <div class="table">
+          <h2>代理状态</h2>
+          <div class="runtime-list" id="runtimeStatus"></div>
         </div>
-      </div>
-      <div class="model-filter" id="modelFilter"></div>
-      <div id="trendChart" class="empty-chart">暂无趋势数据</div>
-    </section>
+        <div class="table">
+          <h2>Host 统计</h2>
+          <div id="hosts"></div>
+        </div>
+      </section>
 
-    <section class="details">
-      <div class="table">
-        <h2>路由拆分</h2>
-        <div id="routes"></div>
-      </div>
-      <div class="table">
-        <h2>模型拆分</h2>
-        <div id="models"></div>
-      </div>
-    </section>
+      <section class="trend-panel layout-widget" data-widget="trend">
+        <button class="drag-handle" type="button" aria-label="拖动趋势图">拖动</button>
+        <div class="trend-head">
+          <h2>趋势图</h2>
+          <div class="legend">
+            <span style="--dot: var(--green)">Token</span>
+            <span style="--dot: var(--red)">费用</span>
+          </div>
+        </div>
+        <div class="model-filter" id="modelFilter"></div>
+        <div id="trendChart" class="empty-chart">暂无趋势数据</div>
+      </section>
 
-    <section class="table recent-panel">
-      <h2>最近请求</h2>
-      <div id="recentRequests"></div>
-    </section>
+      <section class="details layout-widget" data-widget="details">
+        <button class="drag-handle" type="button" aria-label="拖动拆分统计">拖动</button>
+        <div class="table">
+          <h2>路由拆分</h2>
+          <div id="routes"></div>
+        </div>
+        <div class="table">
+          <h2>模型拆分</h2>
+          <div id="models"></div>
+        </div>
+      </section>
+
+      <section class="table recent-panel layout-widget" data-widget="recent">
+        <button class="drag-handle" type="button" aria-label="拖动最近请求">拖动</button>
+        <h2>最近请求</h2>
+        <div id="recentRequests"></div>
+      </section>
+    </div>
     <div class="status" id="status">等待刷新</div>
   </main>
   <script>
     let currentRange = 'day';
     const selectedModels = new Set();
+    let layoutEditing = false;
+    let draggedWidget = null;
+    const layoutStorageKey = 'smartProxyDashboardLayout.v1';
+    const defaultLayout = ['alerts', 'kpis', 'diagnostics', 'trend', 'details', 'recent'];
+    const layoutRoot = document.getElementById('layoutRoot');
+    const layoutToggle = document.getElementById('layoutToggle');
+    const resetLayout = document.getElementById('resetLayout');
     const fmt = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 });
     const unitFmt = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 });
     const moneyFmt = new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const text = (id, value) => { document.getElementById(id).textContent = value; };
+    const layoutWidgets = () => [...layoutRoot.querySelectorAll('[data-widget]')];
+    const normalizeLayout = order => {
+      const known = new Set(defaultLayout);
+      const clean = (Array.isArray(order) ? order : []).filter(id => known.has(id));
+      return [...new Set([...clean, ...defaultLayout])];
+    };
+    const applyLayout = order => {
+      normalizeLayout(order).forEach(widgetId => {
+        const widget = layoutRoot.querySelector(`[data-widget="${widgetId}"]`);
+        if (widget) layoutRoot.appendChild(widget);
+      });
+    };
+    const loadLayout = () => {
+      try {
+        applyLayout(JSON.parse(localStorage.getItem(layoutStorageKey) || '[]'));
+      } catch (_error) {
+        applyLayout(defaultLayout);
+      }
+    };
+    const saveLayout = () => {
+      localStorage.setItem(layoutStorageKey, JSON.stringify(
+        layoutWidgets().map(widget => widget.dataset.widget)
+      ));
+    };
+    const restoreDefaultLayout = () => {
+      localStorage.removeItem(layoutStorageKey);
+      applyLayout(defaultLayout);
+    };
+    const setLayoutEditing = enabled => {
+      layoutEditing = enabled;
+      document.querySelector('main').classList.toggle('layout-editing', enabled);
+      layoutToggle.classList.toggle('active', enabled);
+      layoutToggle.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+      layoutToggle.textContent = enabled ? '完成布局' : '编辑布局';
+      resetLayout.hidden = !enabled;
+      layoutWidgets().forEach(widget => {
+        widget.draggable = enabled;
+      });
+    };
+    const widgetAfterPointer = y => {
+      const widgets = layoutWidgets().filter(widget => widget !== draggedWidget);
+      return widgets.reduce((closest, widget) => {
+        const box = widget.getBoundingClientRect();
+        const offset = y - box.top - box.height / 2;
+        if (offset < 0 && offset > closest.offset) {
+          return { offset, widget };
+        }
+        return closest;
+      }, { offset: Number.NEGATIVE_INFINITY, widget: null }).widget;
+    };
     const setMetric = (id, value, title) => {
       const element = document.getElementById(id);
       element.textContent = value;
@@ -888,6 +1011,41 @@ DASHBOARD_HTML = """<!doctype html>
       await fetch('/api/clear-proxy-stats', { method: 'POST' });
       refresh();
     });
+    layoutToggle.addEventListener('click', () => {
+      setLayoutEditing(!layoutEditing);
+    });
+    resetLayout.addEventListener('click', () => {
+      restoreDefaultLayout();
+      saveLayout();
+    });
+    layoutRoot.addEventListener('dragstart', event => {
+      if (!layoutEditing) {
+        event.preventDefault();
+        return;
+      }
+      draggedWidget = event.target.closest('[data-widget]');
+      if (!draggedWidget) return;
+      draggedWidget.classList.add('dragging');
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', draggedWidget.dataset.widget);
+    });
+    layoutRoot.addEventListener('dragover', event => {
+      if (!layoutEditing || !draggedWidget) return;
+      event.preventDefault();
+      const after = widgetAfterPointer(event.clientY);
+      if (after) {
+        layoutRoot.insertBefore(draggedWidget, after);
+      } else {
+        layoutRoot.appendChild(draggedWidget);
+      }
+    });
+    layoutRoot.addEventListener('dragend', () => {
+      if (!draggedWidget) return;
+      draggedWidget.classList.remove('dragging');
+      draggedWidget = null;
+      saveLayout();
+    });
+    loadLayout();
     refresh();
     setInterval(refresh, 5000);
   </script>

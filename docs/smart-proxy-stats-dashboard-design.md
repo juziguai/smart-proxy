@@ -326,6 +326,10 @@ V1 layout should be practical rather than decorative:
 - Recent request list: show the latest proxy events with host, method, route,
   success state, latency, timestamp, and error text when present. Failed and
   slow rows should be visually highlighted.
+- Editable layout mode: a global toggle enables module-level drag sorting for
+  dashboard sections. When the toggle is off, sections are locked. The first
+  version stores the order in browser `localStorage` and provides a restore
+  default action; it does not support free-position dragging or resizing.
 - Range selector: day/week/month/all.
 - Clear button: clears only smart-proxy request statistics by default.
 

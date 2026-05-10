@@ -28,6 +28,7 @@ Status legend:
 | 14 | Done | Trend filtering and KPI display polish | Dashboard rounds displayed costs to two decimals, adjusts KPI font size for long values, and supports multi-select model trend filtering | Store/server tests cover filtered trends; full suite passes |
 | 15 | Done | Proxy diagnostics panels | Dashboard adds runtime proxy status, Host breakdown, and latest proxy request list backed by `/api/runtime-status` and `/api/recent-requests` | Full suite passes; live endpoints return runtime status and recent request data; dashboard HTML contains new renderers |
 | 16 | Done | Alert strip and anomaly highlighting | Dashboard summarizes slow requests and failing Hosts, marks Host/request rows by health state, and exposes slow/failure metadata in summary/recent APIs | Store/server tests cover alert fields, slow request markers, and dashboard render hooks |
+| 17 | Done | Editable dashboard layout | Dashboard adds an edit-layout toggle, module drag sorting, local browser persistence, and restore-default action | Server HTML tests cover layout controls, widget ids, localStorage persistence hooks, and drag handlers |
 
 ## Current Decision Log
 
@@ -44,6 +45,7 @@ Status legend:
 | API cost estimate | DeepSeek API models are billable; MiniMax/MiMo token-plan models are non-billable in this dashboard |
 | Diagnostics panels | Runtime status, Host ranking, and recent requests are displayed in the local dashboard |
 | Alert thresholds | Slow request `>= 3000ms`; Host warning failure rate `>= 10%`; Host critical failure rate `>= 50%` |
+| Layout persistence | Dashboard module order is stored in browser `localStorage`; no backend schema change |
 
 ## Update Rule
 
