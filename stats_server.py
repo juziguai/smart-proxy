@@ -156,7 +156,11 @@ DASHBOARD_HTML = """<!doctype html>
       margin-bottom: 12px;
     }
     .value {
-      font-size: clamp(34px, 4vw, 44px);
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: clip;
+      white-space: nowrap;
+      font-size: 44px;
       line-height: 1;
       font-weight: 900;
       letter-spacing: 0;
@@ -304,8 +308,24 @@ DASHBOARD_HTML = """<!doctype html>
   <script>
     let currentRange = 'day';
     const fmt = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 });
+    const unitFmt = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 });
     const text = (id, value) => { document.getElementById(id).textContent = value; };
+    const setMetric = (id, value, title) => {
+      const element = document.getElementById(id);
+      element.textContent = value;
+      element.title = title || value;
+    };
     const percent = value => `${Math.round(value * 100)}%`;
+    const compactNumber = value => {
+      const abs = Math.abs(value);
+      if (abs >= 100000000) {
+        return `${unitFmt.format(value / 100000000)}亿`;
+      }
+      if (abs >= 10000) {
+        return `${unitFmt.format(value / 10000)}万`;
+      }
+      return fmt.format(value);
+    };
     const escapeHtml = value => String(value)
       .replaceAll('&', '&amp;')
       .replaceAll('<', '&lt;')
@@ -340,13 +360,17 @@ DASHBOARD_HTML = """<!doctype html>
       const data = await res.json();
       const p = data.proxy;
       const u = data.usage;
-      text('totalRequests', fmt.format(p.total_requests));
+      setMetric('totalRequests', fmt.format(p.total_requests));
       text('requestSub', `成功 ${fmt.format(p.successful_requests)} / 失败 ${fmt.format(p.failed_requests)}`);
-      text('totalTokens', fmt.format(u.total_tokens));
-      text('tokenSub', `输入 ${fmt.format(u.input_tokens)} / 输出 ${fmt.format(u.output_tokens)}`);
-      text('cacheTokens', fmt.format(u.cache_read_input_tokens + u.cache_creation_input_tokens));
-      text('cacheSub', `读 ${fmt.format(u.cache_read_input_tokens)} / 写 ${fmt.format(u.cache_creation_input_tokens)}`);
-      text('avgLatency', `${fmt.format(p.average_latency_ms)}ms`);
+      setMetric('totalTokens', compactNumber(u.total_tokens), fmt.format(u.total_tokens));
+      text('tokenSub', `输入 ${compactNumber(u.input_tokens)} / 输出 ${compactNumber(u.output_tokens)}`);
+      setMetric(
+        'cacheTokens',
+        compactNumber(u.cache_read_input_tokens + u.cache_creation_input_tokens),
+        fmt.format(u.cache_read_input_tokens + u.cache_creation_input_tokens)
+      );
+      text('cacheSub', `读 ${compactNumber(u.cache_read_input_tokens)} / 写 ${compactNumber(u.cache_creation_input_tokens)}`);
+      setMetric('avgLatency', `${fmt.format(p.average_latency_ms)}ms`);
       text('successRate', `成功率 ${percent(p.success_rate)}`);
       document.getElementById('routes').innerHTML = rows(Object.entries(p.routes));
       document.getElementById('models').innerHTML = modelRows(u.models);

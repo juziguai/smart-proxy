@@ -113,6 +113,22 @@ class StatsServerTests(unittest.TestCase):
         self.assertIn("输入", html)
         self.assertIn("输出", html)
 
+    def test_dashboard_html_compacts_large_kpi_numbers(self):
+        with TemporaryDirectory() as temp_dir:
+            store = StatsStore(f"{temp_dir}/stats.db")
+
+            status, _headers, body = handle_stats_request(
+                "GET",
+                urlparse("/"),
+                store,
+            )
+
+        html = body.decode("utf-8")
+        self.assertEqual(status, 200)
+        self.assertIn("compactNumber", html)
+        self.assertIn("setMetric", html)
+        self.assertIn("100000000", html)
+
     def test_build_stats_response_encodes_json(self):
         status, headers, body = build_stats_response(201, {"ok": True})
 
