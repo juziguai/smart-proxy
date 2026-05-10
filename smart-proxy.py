@@ -1,10 +1,15 @@
 """Smart proxy sidecar — auto-detect Windows system proxy per request."""
 import asyncio
+from datetime import datetime, timezone
 import fnmatch
 import os
 import sys
 import time
 import winreg
+
+from stats_store import ProxyRequestEvent, StatsStore
+from stats_server import DASHBOARD_HOST, DASHBOARD_PORT, start_stats_server
+from usage_ingestion import run_usage_ingestion_loop
 
 LISTEN_HOST = "127.0.0.1"
 LISTEN_PORT = 8889
@@ -64,6 +69,11 @@ proxy_cache = Cache(CACHE_SEC)
 
 WHITELIST_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "whitelist.txt")
 WHITELIST_RELOAD_SEC = 60
+STATS_DB_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "smart-proxy-stats.db",
+)
+stats_store = None
 
 
 class Whitelist:
@@ -144,11 +154,12 @@ async def connect_direct_tunnel(client_r, client_w, target):
     except Exception:
         safe_write(client_w, b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
         client_w.close()
-        return
+        return False
     safe_write(client_w, b"HTTP/1.1 200 Connection Established\r\n\r\n")
     await client_w.drain()
     await asyncio.gather(relay(client_r, rmt_w), relay(rmt_r, client_w))
     rmt_w.close()
+    return True
 
 
 async def connect_via_proxy(client_r, client_w, target, upstream):
@@ -158,7 +169,7 @@ async def connect_via_proxy(client_r, client_w, target, upstream):
     except Exception:
         safe_write(client_w, b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
         client_w.close()
-        return
+        return False
 
     pw.write(f"CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n".encode())
     await pw.drain()
@@ -167,7 +178,7 @@ async def connect_via_proxy(client_r, client_w, target, upstream):
         safe_write(client_w, b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
         client_w.close()
         pw.close()
-        return
+        return False
     # drain proxy response headers
     while True:
         line = await asyncio.wait_for(pr.readline(), timeout=5)
@@ -178,6 +189,7 @@ async def connect_via_proxy(client_r, client_w, target, upstream):
     await client_w.drain()
     await asyncio.gather(relay(client_r, pw), relay(pr, client_w))
     pw.close()
+    return True
 
 
 # ── plain HTTP (non-CONNECT) ──────────────────────────────────────────
@@ -199,7 +211,7 @@ async def http_direct(client_r, client_w, first_line):
     if not host:
         safe_write(client_w, b"HTTP/1.1 400 Bad Request\r\n\r\n")
         client_w.close()
-        return
+        return False
 
     # 读取 body（如果有 Content-Length）
     body = await _read_body(client_r, headers_data)
@@ -209,12 +221,13 @@ async def http_direct(client_r, client_w, first_line):
     except Exception:
         safe_write(client_w, b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
         client_w.close()
-        return
+        return False
 
     rmt_w.write(headers_data + body)
     await rmt_w.drain()
     await relay(rmt_r, client_w)
     rmt_w.close()
+    return True
 
 
 async def http_via_proxy(client_r, client_w, first_line, upstream):
@@ -225,7 +238,7 @@ async def http_via_proxy(client_r, client_w, first_line, upstream):
     except Exception:
         safe_write(client_w, b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
         client_w.close()
-        return
+        return False
 
     pw.write(first_line)
     while True:
@@ -241,6 +254,7 @@ async def http_via_proxy(client_r, client_w, first_line, upstream):
 
     await relay(pr, client_w)
     pw.close()
+    return True
 
 
 # ── helpers ───────────────────────────────────────────────────────────
@@ -250,6 +264,30 @@ def safe_write(writer, data):
         writer.write(data)
     except Exception:
         pass
+
+
+def utc_now_iso():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def record_proxy_stats(started_at, method, host, route, success, latency_ms, error):
+    if stats_store is None:
+        return
+    try:
+        stats_store.record_proxy_request(
+            ProxyRequestEvent(
+                started_at=started_at,
+                completed_at=utc_now_iso(),
+                method=method,
+                host=host,
+                route=route,
+                success=success,
+                latency_ms=latency_ms,
+                error=error,
+            )
+        )
+    except Exception as exc:
+        log(f"stats record failed: {exc}")
 
 
 async def _read_body(reader, request_bytes):
@@ -273,7 +311,15 @@ async def _read_body(reader, request_bytes):
 # ── main handler ──────────────────────────────────────────────────────
 
 async def handle(client_r, client_w):
+    started_at = utc_now_iso()
+    start_monotonic = time.monotonic()
     upstream = proxy_cache.get()
+    method = "?"
+    target = "?"
+    host = ""
+    route = "direct"
+    success = False
+    error = None
     try:
         first_line = await asyncio.wait_for(client_r.readline(), timeout=10)
     except asyncio.TimeoutError:
@@ -294,37 +340,65 @@ async def handle(client_r, client_w):
 
     if force_direct:
         via = "direct (whitelist)"
+        route = "direct_whitelist"
     elif upstream:
         via = f"proxy {upstream[0]}:{upstream[1]}"
+        route = "proxy"
     else:
         via = "direct"
+        route = "direct"
     log(f"{method} {host or target[:80]} -> {via}")
 
-    if method == "CONNECT":
-        while True:
-            line = await client_r.readline()
-            if line in (b"\r\n", b"\n", b""):
-                break
-        if force_direct or not upstream:
-            await connect_direct_tunnel(client_r, client_w, target)
-        else:
-            await connect_via_proxy(client_r, client_w, target, upstream)
-    else:
-        if force_direct or not upstream:
-            await http_direct(client_r, client_w, first_line)
-        else:
-            await http_via_proxy(client_r, client_w, first_line, upstream)
     try:
-        client_w.close()
-    except Exception:
-        pass
+        if method == "CONNECT":
+            while True:
+                line = await client_r.readline()
+                if line in (b"\r\n", b"\n", b""):
+                    break
+            if force_direct or not upstream:
+                result = await connect_direct_tunnel(client_r, client_w, target)
+            else:
+                result = await connect_via_proxy(client_r, client_w, target, upstream)
+        else:
+            if force_direct or not upstream:
+                result = await http_direct(client_r, client_w, first_line)
+            else:
+                result = await http_via_proxy(client_r, client_w, first_line, upstream)
+        success = result is not False
+    except Exception as exc:
+        error = str(exc)
+        success = False
+    finally:
+        latency_ms = int((time.monotonic() - start_monotonic) * 1000)
+        record_proxy_stats(
+            started_at,
+            method,
+            host or target[:80],
+            route,
+            success,
+            latency_ms,
+            error,
+        )
+        try:
+            client_w.close()
+        except Exception:
+            pass
 
 
 async def main():
+    global stats_store
+    stats_store = StatsStore(STATS_DB_FILE)
     server = await asyncio.start_server(handle, LISTEN_HOST, LISTEN_PORT)
+    dashboard = await start_stats_server(
+        stats_store,
+        DASHBOARD_HOST,
+        DASHBOARD_PORT,
+    )
     log(f"listening {LISTEN_HOST}:{LISTEN_PORT}  |  mode: auto-detect Windows system proxy  |  cache: {CACHE_SEC}s")
-    async with server:
-        await server.serve_forever()
+    log(f"dashboard http://{DASHBOARD_HOST}:{DASHBOARD_PORT}")
+    asyncio.create_task(run_usage_ingestion_loop(stats_store, log=log))
+    async with server, dashboard:
+        await asyncio.gather(server.serve_forever(), dashboard.serve_forever())
 
 
 if __name__ == "__main__":

@@ -98,60 +98,76 @@ start "" "<项目路径>\start-proxy.vbs"
 ## 完整流程图
 
 ```
-                          ┌─── 启动阶段 ──────────────────────────┐
-                          │                                        │
-     .\claude.ps1 ────────┤                                        │
-                          │  [1] cd 到项目目录                      │
-                          │  [2] 检测 :8889 是否在 LISTENING        │
-                          │      ├─ 是 → 跳过                      │
-                          │      └─ 否 → 后台拉起 smart-proxy.py   │
-                          │  [3] 设置 HTTP_PROXY = 127.0.0.1:8889  │
-                          │  [4] 显示启动模式菜单                   │
-                          │  [5] 启动 Claude Code                   │
-                          └────────────────────────────────────────┘
+┌────────────────────────────── 启动阶段 ──────────────────────────────┐
+│                                                                       │
+│  .\claude.ps1                                                         │
+│       │                                                               │
+│       ├─ 检查 127.0.0.1:8889 代理端口                                 │
+│       ├─ 检查 127.0.0.1:8890 统计面板端口                              │
+│       │     ├─ 两个端口都可用 → 跳过 sidecar 启动                      │
+│       │     ├─ 8889 可用但 8890 不可用 → 提示停止旧版 sidecar           │
+│       │     └─ 任意端口未运行 → 后台启动 smart-proxy.py                │
+│       │                                                               │
+│       ├─ 等待 dashboard API 返回 HTTP 200                              │
+│       ├─ 写入日志 logs/smart-proxy.out.log / smart-proxy.err.log       │
+│       ├─ 设置 HTTP_PROXY / HTTPS_PROXY = http://127.0.0.1:8889         │
+│       ├─ 显示版本、模型提供商、启动模式菜单                            │
+│       └─ 启动 Claude Code                                              │
+│                                                                       │
+└───────────────────────────────────────────────────────────────────────┘
 
 
-                          ┌─── 运行时 ─────────────────────────────┐
-                          │                                        │
-     Claude Code ────────► 127.0.0.1:8889 (sidecar)               │
-                          │    │                                   │
-                          │    ├── 提取目标域名                     │
-                          │    │   CONNECT target / Host header     │
-                          │    │                                   │
-                          │    ├── 匹配白名单？                     │
-                          │    │   ├─ 是 → 强制直连 ──────────►    │
-                          │    │   └─ 否 ↓                         │
-                          │    │                                   │
-                          │    ├── 读注册表                         │
-                          │    │   HKLM\...\Internet Settings       │
-                          │    │   ┌─ ProxyEnable=0 → 直连 ────┐  │
-                          │    │   └─ ProxyEnable=1 → 代理 ──┐  │  │
-                          │    │                              │  │  │
-                          │    ├── 直连 ─────────────────► 目标服务器│
-                          │    │                                     │
-                          │    └── 代理 ──► 127.0.0.1:10090 ──► 出站│
-                          │               (v2rayA / Clash / ...)     │
-                          │                                          │
-                          │    缓存 3 秒，下次请求重新检测           │
-                          │    白名单文件变更 → 60 秒自动重载        │
-                          │    你中途开关代理 → 最多 3 秒自动切换    │
-                          └──────────────────────────────────────────┘
+┌────────────────────────────── 运行时链路 ─────────────────────────────┐
+│                                                                       │
+│  Claude Code                                                          │
+│       │                                                               │
+│       ├─ API 请求 ───────────────► 127.0.0.1:8889 (proxy sidecar)      │
+│       │                                │                              │
+│       │                                ├─ 提取 CONNECT target / Host   │
+│       │                                ├─ 匹配 whitelist.txt           │
+│       │                                │    ├─ 命中 → direct_whitelist │
+│       │                                │    └─ 未命中 → 读系统代理     │
+│       │                                │                              │
+│       │                                ├─ ProxyEnable=0 → direct ─────► 目标服务器
+│       │                                └─ ProxyEnable=1 → proxy ──────► 127.0.0.1:10808
+│       │                                                               │   │
+│       │                                                               │   └─► 出站代理 / 目标服务器
+│       │                                                               │
+│       └─ 本地 transcript JSONL ──► ~/.claude/projects/**/*.jsonl       │
+│                                        │                              │
+│                                        └─ usage_ingestion 后台扫描     │
+│                                             input/output/cache/model   │
+│                                                                       │
+│  smart-proxy.py 同一进程内提供：                                        │
+│       ├─ 127.0.0.1:8889  代理服务                                      │
+│       └─ 127.0.0.1:8890  dashboard + /api/summary                      │
+│                                                                       │
+└───────────────────────────────────────────────────────────────────────┘
 
 
-                          ┌─── 数据路径 ───────────────────────────┐
-                          │                                        │
-     HTTPS 请求            sidecar 处理             最终         │
-     (TLS 加密)            (不解密，纯转发)                       │
-                          │                                        │
-     ┌─────────┐          ┌──────────┐          ┌──────────┐     │
-     │ ClientHello ──────►│ CONNECT  │─────────►│ ServerHello│     │
-     │   密文1   ──────►  │ 隧道建立  │─────────►│   密文1   │     │
-     │   密文2   ◄──────  │ 双向字节 │ ◄────────│   密文2   │     │
-     └─────────┘          │   管道    │          └──────────┘     │
-                          └──────────┘                             │
-                                                                    │
-     附加延迟: < 1ms（本地回环 + 一次注册表读取）                  │
-                          └──────────────────────────────────────────┘
+┌────────────────────────────── 统计数据流 ─────────────────────────────┐
+│                                                                       │
+│  proxy request completed                                              │
+│       └─ 记录 method / host / route / success / latency               │
+│                                                                       │
+│  Claude transcript usage                                              │
+│       └─ 读取 message.model + message.usage                            │
+│          input_tokens / output_tokens                                  │
+│          cache_read_input_tokens / cache_creation_input_tokens          │
+│                                                                       │
+│  SQLite: smart-proxy-stats.db                                          │
+│       ├─ proxy_requests                                                │
+│       └─ usage_events                                                  │
+│                                                                       │
+│  Dashboard: http://127.0.0.1:8890                                      │
+│       ├─ 总请求数 / 成功率 / 平均延迟 / 路由拆分                       │
+│       ├─ 总 token / 输入 / 输出 / cache read / cache write             │
+│       └─ 模型榜单：按模型展示 total、input、output、cache read/write   │
+│                                                                       │
+│  说明：smart-proxy 不解密 HTTPS，不读取 API key；token 来自 Claude Code │
+│  已写入本地 transcript 的 usage 字段。                                  │
+│                                                                       │
+└───────────────────────────────────────────────────────────────────────┘
 ```
 
 ## 白名单
@@ -184,6 +200,47 @@ localhost
 | google.com | 0.99s | 代理（国外） |
 
 白名单命中直连约 0.15 秒，未命中走代理约 2 秒，差异 10 倍+。
+
+## 本地统计面板
+
+smart-proxy 会在同一个 Python 进程里同时启动两个本地服务：
+
+| 服务 | 地址 | 说明 |
+|------|------|------|
+| 代理 sidecar | `http://127.0.0.1:8889` | Claude Code 的 `HTTP_PROXY` / `HTTPS_PROXY` 指向这里 |
+| 统计面板 | `http://127.0.0.1:8890` | 本地 Web UI，展示请求统计和 Claude Code token 用量 |
+
+通过 `claude-with-proxy.ps1` 启动时，脚本会先检查 `8889` 和 `8890` 是否已在监听：
+
+- 两个端口都已运行：跳过启动，直接继续 Claude Code 启动流程
+- 任意端口未运行：后台启动 `smart-proxy.py`
+- 启动后复查端口，确认代理和 dashboard 都可用
+- dashboard 可用时会打印 `http://127.0.0.1:8890`
+
+统计面板包含：
+
+- 总请求数、成功/失败、成功率、平均延迟
+- 直连、白名单直连、上游代理的路由拆分
+- 输入 token、输出 token、cache read、cache write
+- 模型拆分榜单：按模型展示总 token、输入、输出、cache read、cache write
+- 日 / 周 / 月 / 全部范围切换
+- 清除 smart-proxy 请求统计按钮
+
+token 数据来自 Claude Code 本地 transcript：
+
+```text
+%USERPROFILE%\.claude\projects\**\*.jsonl
+```
+
+如果设置了 `CLAUDE_CONFIG_DIR`，则读取：
+
+```text
+%CLAUDE_CONFIG_DIR%\projects\**\*.jsonl
+```
+
+smart-proxy 不解密 HTTPS，也不会读取 API key。token 用量来自 Claude Code 已经写入本地 JSONL 的 `message.usage` 字段。清除按钮默认只清除 smart-proxy 自己记录的请求统计，不删除 Claude Code transcript。
+
+启动脚本会把 sidecar 日志写入 `logs/smart-proxy.out.log` 和 `logs/smart-proxy.err.log`，并等待 dashboard API 返回 HTTP 200 后再继续启动 Claude Code，避免只看到端口监听但页面实际不可用。
 
 ## 配置
 
