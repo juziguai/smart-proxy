@@ -185,6 +185,47 @@ localhost
 
 白名单命中直连约 0.15 秒，未命中走代理约 2 秒，差异 10 倍+。
 
+## 本地统计面板
+
+smart-proxy 会在同一个 Python 进程里同时启动两个本地服务：
+
+| 服务 | 地址 | 说明 |
+|------|------|------|
+| 代理 sidecar | `http://127.0.0.1:8889` | Claude Code 的 `HTTP_PROXY` / `HTTPS_PROXY` 指向这里 |
+| 统计面板 | `http://127.0.0.1:8890` | 本地 Web UI，展示请求统计和 Claude Code token 用量 |
+
+通过 `claude-with-proxy.ps1` 启动时，脚本会先检查 `8889` 和 `8890` 是否已在监听：
+
+- 两个端口都已运行：跳过启动，直接继续 Claude Code 启动流程
+- 任意端口未运行：后台启动 `smart-proxy.py`
+- 启动后复查端口，确认代理和 dashboard 都可用
+- dashboard 可用时会打印 `http://127.0.0.1:8890`
+
+统计面板包含：
+
+- 总请求数、成功/失败、成功率、平均延迟
+- 直连、白名单直连、上游代理的路由拆分
+- 输入 token、输出 token、cache read、cache write
+- 模型拆分榜单：按模型展示总 token、输入、输出、cache read、cache write
+- 日 / 周 / 月 / 全部范围切换
+- 清除 smart-proxy 请求统计按钮
+
+token 数据来自 Claude Code 本地 transcript：
+
+```text
+%USERPROFILE%\.claude\projects\**\*.jsonl
+```
+
+如果设置了 `CLAUDE_CONFIG_DIR`，则读取：
+
+```text
+%CLAUDE_CONFIG_DIR%\projects\**\*.jsonl
+```
+
+smart-proxy 不解密 HTTPS，也不会读取 API key。token 用量来自 Claude Code 已经写入本地 JSONL 的 `message.usage` 字段。清除按钮默认只清除 smart-proxy 自己记录的请求统计，不删除 Claude Code transcript。
+
+启动脚本会把 sidecar 日志写入 `logs/smart-proxy.out.log` 和 `logs/smart-proxy.err.log`，并等待 dashboard API 返回 HTTP 200 后再继续启动 Claude Code，避免只看到端口监听但页面实际不可用。
+
 ## 配置
 
 ### 命令行参数
