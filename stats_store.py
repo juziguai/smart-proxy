@@ -85,7 +85,7 @@ class StatsStore:
         where = ""
         params = []
         if since:
-            where = "WHERE started_at >= ?"
+            where = "WHERE datetime(started_at) >= datetime(?)"
             params.append(since)
         params.append(limit)
 
@@ -258,7 +258,7 @@ class StatsStore:
         where = ""
         params = []
         if since:
-            where = "WHERE started_at >= ?"
+            where = "WHERE datetime(started_at) >= datetime(?)"
             params.append(since)
         connect_latency_expr = self._connect_latency_expr()
         duration_expr = "COALESCE(duration_ms, latency_ms)"
@@ -477,7 +477,7 @@ class StatsStore:
         where = ""
         params = []
         if since:
-            where = "WHERE timestamp >= ?"
+            where = "WHERE datetime(timestamp) >= datetime(?)"
             params.append(since)
 
         with self._connection() as conn:
@@ -694,7 +694,7 @@ class StatsStore:
 
     def _range_query(self, select_sql, time_column, since):
         if since:
-            return f"{select_sql} WHERE {time_column} >= ?"
+            return f"{select_sql} WHERE datetime({time_column}) >= datetime(?)"
         return select_sql
 
     def _usage_trends_query(self, since, models):
@@ -711,7 +711,7 @@ class StatsStore:
         clauses = []
         params = []
         if since:
-            clauses.append("timestamp >= ?")
+            clauses.append("datetime(timestamp) >= datetime(?)")
             params.append(since)
         if models:
             placeholders = ", ".join("?" for _ in models)

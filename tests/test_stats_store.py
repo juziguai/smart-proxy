@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import sqlite3
 import unittest
 
@@ -105,6 +105,56 @@ class StatsStoreTests(unittest.TestCase):
         self.assertEqual(summary["proxy"]["failed_requests"], 0)
         self.assertEqual(summary["proxy"]["average_latency_ms"], 50)
         self.assertEqual(summary["proxy"]["routes"], {"proxy": 1})
+
+    def test_local_day_range_includes_utc_events_after_local_midnight(self):
+        tmp_path = self.enterContext(TemporaryDirectoryPath())
+        store = StatsStore(tmp_path / "stats.db")
+        china_tz = timezone(timedelta(hours=8))
+
+        store.record_proxy_request(
+            ProxyRequestEvent(
+                started_at="2026-05-10T17:30:00+00:00",
+                completed_at="2026-05-10T17:31:00+00:00",
+                method="CONNECT",
+                host="api.deepseek.com",
+                route="proxy",
+                success=True,
+                latency_ms=120,
+                error=None,
+            )
+        )
+        store.upsert_usage_event(
+            UsageEvent(
+                source_file="session-local-day.jsonl",
+                source_line=1,
+                timestamp="2026-05-10T17:32:00+00:00",
+                session_id="session-local-day",
+                model="deepseek-v4-flash",
+                input_tokens=100,
+                output_tokens=20,
+                cache_read_input_tokens=10,
+                cache_creation_input_tokens=0,
+                web_search_requests=0,
+                web_fetch_requests=0,
+                service_tier="standard",
+                speed="fast",
+            )
+        )
+
+        summary = store.get_summary(
+            "day",
+            now=datetime(2026, 5, 11, 1, 40, tzinfo=china_tz),
+        )
+        trends = store.get_trends(
+            "day",
+            now=datetime(2026, 5, 11, 1, 40, tzinfo=china_tz),
+        )
+
+        self.assertEqual(summary["proxy"]["total_requests"], 1)
+        self.assertEqual(summary["usage"]["total_tokens"], 120)
+        self.assertEqual(len(trends["points"]), 1)
+        self.assertEqual(trends["points"][0]["proxy_requests"], 1)
+        self.assertEqual(trends["points"][0]["total_tokens"], 120)
 
     def test_proxy_summary_includes_host_breakdown(self):
         tmp_path = self.enterContext(TemporaryDirectoryPath())

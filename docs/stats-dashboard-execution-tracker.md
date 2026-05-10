@@ -32,6 +32,7 @@ Status legend:
 | 18 | Done | Telemetry semantics hardening | Split connect latency from total tunnel/request duration so long-lived CONNECT streams no longer trigger slow-request alerts; legacy no-error CONNECT failures no longer trigger failure alerts | Full suite passes; live `/api/summary` reports zero alerts with historical DeepSeek tunnel rows retained as raw stats |
 | 19 | Done | Console tab shell redesign | Dashboard is reorganized into Overview, Providers, Requests, Usage & Cost, Whitelist, and Doctor tabs while preserving existing metrics and overview layout editing | Server HTML tests cover tab shell, status chips, domain tab placement, and existing dashboard render hooks |
 | 20 | Done | Reference console visual alignment | Dashboard shell now matches the approved reference: flat full-width topbar, underline tabs, green health banner, 5 KPI cards, trend + Provider health grid, and bottom anomaly/request tables | Added reference-layout HTML test; full test suite passes; live dashboard screenshot captured at `logs/dashboard-reference-match.png` |
+| 21 | Done | Local day timezone filter fix | Day/week/month filters compare timestamp values after timezone normalization so UTC-stored events after local midnight appear in today's dashboard | Added regression test for UTC events inside China local day; full test suite passes; live screenshot captured at `logs/dashboard-data-restored.png` |
 
 ## Current Decision Log
 
