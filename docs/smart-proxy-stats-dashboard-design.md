@@ -316,6 +316,15 @@ can map to `day`, `week`, and `month`.
 
 V1 layout should be practical rather than decorative:
 
+- The dashboard uses a console-style top-level tab shell:
+  - Overview
+  - Providers
+  - Requests
+  - Usage & Cost
+  - Whitelist
+  - Doctor
+  This keeps the current metrics visible while creating room for provider
+  health, request detail, whitelist management, and doctor checks.
 - Top row: total requests, total tokens, cache/thinking-style bucket, average
   connect latency, and average duration.
 - Secondary row: success/failure, input/output token split, route split.

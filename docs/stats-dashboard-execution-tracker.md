@@ -30,6 +30,7 @@ Status legend:
 | 16 | Done | Alert strip and anomaly highlighting | Dashboard summarizes slow requests and failing Hosts, marks Host/request rows by health state, and exposes slow/failure metadata in summary/recent APIs | Store/server tests cover alert fields, slow request markers, and dashboard render hooks |
 | 17 | Done | Editable dashboard layout | Dashboard adds an edit-layout toggle, module drag sorting, local browser persistence, and restore-default action | Server HTML tests cover layout controls, widget ids, localStorage persistence hooks, and drag handlers |
 | 18 | Done | Telemetry semantics hardening | Split connect latency from total tunnel/request duration so long-lived CONNECT streams no longer trigger slow-request alerts; legacy no-error CONNECT failures no longer trigger failure alerts | Full suite passes; live `/api/summary` reports zero alerts with historical DeepSeek tunnel rows retained as raw stats |
+| 19 | Done | Console tab shell redesign | Dashboard is reorganized into Overview, Providers, Requests, Usage & Cost, Whitelist, and Doctor tabs while preserving existing metrics and overview layout editing | Server HTML tests cover tab shell, status chips, domain tab placement, and existing dashboard render hooks |
 
 ## Current Decision Log
 
@@ -47,6 +48,18 @@ Status legend:
 | Diagnostics panels | Runtime status, Host ranking, and recent requests are displayed in the local dashboard |
 | Alert thresholds | Slow connect `>= 3000ms`; Host warning failure rate `>= 10%`; Host critical failure rate `>= 50%` |
 | Layout persistence | Dashboard module order is stored in browser `localStorage`; no backend schema change |
+| Dashboard information architecture | Top-level tabs are Overview, Providers, Requests, Usage & Cost, Whitelist, and Doctor |
+
+## Candidate Backlog
+
+| Status | Feature | Notes |
+| --- | --- | --- |
+| Accepted | Provider health panel | Group Hosts by provider such as MiniMax, DeepSeek, and MiMo; show recent success rate, connect latency, route, latest error, and whether the provider looks healthy. |
+| Accepted | Request detail drawer | Click a Host or recent request row to inspect started/completed time, route, connect latency, duration, error, alert state, and recent same-Host context. |
+| Accepted | Whitelist hit analysis | Show Hosts that frequently use proxy routing and may be candidates for whitelist-direct routing, based on route mix, connect latency, duration, and failure behavior. |
+| Accepted | Whitelist UI management | Add a dashboard tab for viewing, adding, removing, saving, and reloading whitelist entries without editing `whitelist.txt` manually. |
+| Accepted | Doctor page | Add a dashboard tab that checks local service health, Python path, Claude transcript readability, whitelist status, system proxy state, and upstream proxy connectivity. |
+| Accepted | Anomaly baseline | Compare each Host/provider against its own historical baseline so unusual latency or failure spikes can be detected before fixed thresholds are crossed. |
 
 ## Update Rule
 

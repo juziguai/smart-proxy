@@ -223,6 +223,7 @@ smart-proxy 会在同一个 Python 进程里同时启动两个本地服务：
 
 统计面板包含：
 
+- 控制台式页签结构：总览、Providers、Requests、Usage & Cost、Whitelist、Doctor
 - 总请求数、成功/失败、成功率、平均建连耗时、平均持续时长
 - 直连、白名单直连、上游代理的路由拆分
 - 输入 token、输出 token、cache read、cache write

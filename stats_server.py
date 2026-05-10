@@ -549,13 +549,94 @@ DASHBOARD_HTML = """<!doctype html>
       color: var(--muted);
       font-size: 13px;
     }
+    .shell-status {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+    .status-chip {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--wash);
+      color: #29416d;
+      font-size: 12px;
+      font-weight: 900;
+      padding: 7px 10px;
+      white-space: nowrap;
+    }
+    .status-chip.good {
+      background: #dff7ee;
+      border-color: #bfe9d8;
+      color: var(--green);
+    }
+    .status-chip.warning {
+      background: #fff0d8;
+      border-color: #ffd39a;
+      color: var(--orange);
+    }
+    .tab-bar {
+      display: flex;
+      gap: 8px;
+      margin: 0 0 18px;
+      overflow-x: auto;
+      padding-bottom: 4px;
+    }
+    .tab-button {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--wash);
+      color: #29416d;
+      cursor: pointer;
+      flex: 0 0 auto;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 900;
+      padding: 10px 14px;
+      white-space: nowrap;
+    }
+    .tab-button.active {
+      background: #dbe9ff;
+      border-color: rgba(36,89,230,0.35);
+      color: var(--blue);
+    }
+    .tab-panel {
+      display: none;
+    }
+    .tab-panel.active {
+      display: block;
+    }
+    .overview-split {
+      display: grid;
+      grid-template-columns: minmax(0, 1.4fr) minmax(340px, 0.6fr);
+      gap: 18px;
+    }
+    .panel-note {
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1.7;
+      margin: 0;
+    }
+    .placeholder-list {
+      display: grid;
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .placeholder-list span {
+      border-top: 1px solid #edf1f7;
+      color: var(--muted);
+      font-weight: 750;
+      padding-top: 10px;
+    }
     @media (max-width: 920px) {
       main { width: calc(100vw - 24px); padding: 18px; border-radius: 20px; }
       header { align-items: flex-start; flex-direction: column; }
-      .grid, .details { grid-template-columns: 1fr; }
+      .grid, .details, .overview-split { grid-template-columns: 1fr; }
       .model-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .trend-head { align-items: flex-start; flex-direction: column; }
       .controls { width: 100%; justify-content: space-between; }
+      .shell-status { justify-content: flex-start; }
       .alerts-panel { grid-template-columns: 1fr; }
       .runtime-item, .host-row, .request-row { grid-template-columns: 1fr; }
       .request-time { white-space: normal; }
@@ -569,7 +650,12 @@ DASHBOARD_HTML = """<!doctype html>
         <svg class="pulse" viewBox="0 0 32 32" aria-hidden="true">
           <path d="M3 17h6l3-11 6 22 4-11h7" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
-        <span>Smart Proxy</span>
+        <span>Smart Proxy Console</span>
+      </div>
+      <div class="shell-status" aria-label="service status">
+        <span class="status-chip good" id="proxyChip">Proxy 127.0.0.1:8889</span>
+        <span class="status-chip good" id="dashboardChip">Dashboard 127.0.0.1:8890</span>
+        <span class="status-chip" id="upstreamChip">Upstream detecting</span>
       </div>
       <div class="controls">
         <div class="segment" role="group" aria-label="range">
@@ -584,6 +670,16 @@ DASHBOARD_HTML = """<!doctype html>
       </div>
     </header>
 
+    <nav class="tab-bar" aria-label="dashboard sections">
+      <button class="tab-button active" data-tab-target="overview">总览</button>
+      <button class="tab-button" data-tab-target="providers">Providers</button>
+      <button class="tab-button" data-tab-target="requests">Requests</button>
+      <button class="tab-button" data-tab-target="usage">Usage & Cost</button>
+      <button class="tab-button" data-tab-target="whitelist">Whitelist</button>
+      <button class="tab-button" data-tab-target="doctor">Doctor</button>
+    </nav>
+
+    <section class="tab-panel active" data-tab-panel="overview">
     <div class="layout-root" id="layoutRoot">
       <section class="alerts-panel clean layout-widget" id="alertsPanel" data-widget="alerts" aria-live="polite">
         <button class="drag-handle" type="button" aria-label="拖动运行告警">拖动</button>
@@ -621,18 +717,6 @@ DASHBOARD_HTML = """<!doctype html>
         </article>
       </section>
 
-      <section class="details diagnostics layout-widget" data-widget="diagnostics">
-        <button class="drag-handle" type="button" aria-label="拖动代理诊断">拖动</button>
-        <div class="table">
-          <h2>代理状态</h2>
-          <div class="runtime-list" id="runtimeStatus"></div>
-        </div>
-        <div class="table">
-          <h2>Host 统计</h2>
-          <div id="hosts"></div>
-        </div>
-      </section>
-
       <section class="trend-panel layout-widget" data-widget="trend">
         <button class="drag-handle" type="button" aria-label="拖动趋势图">拖动</button>
         <div class="trend-head">
@@ -645,9 +729,43 @@ DASHBOARD_HTML = """<!doctype html>
         <div class="model-filter" id="modelFilter"></div>
         <div id="trendChart" class="empty-chart">暂无趋势数据</div>
       </section>
+    </div>
 
-      <section class="details layout-widget" data-widget="details">
-        <button class="drag-handle" type="button" aria-label="拖动拆分统计">拖动</button>
+    <div class="overview-split">
+      <section class="table">
+        <h2>Provider 健康摘要</h2>
+        <div id="providerSummary"></div>
+      </section>
+      <section class="table">
+        <h2>近期异常预览</h2>
+        <p class="panel-note">这里优先展示告警、慢建连和失败请求。完整请求流在 Requests 页签里查看。</p>
+        <div id="recentAnomalies"></div>
+      </section>
+    </div>
+    </section>
+
+    <section class="tab-panel" data-tab-panel="providers">
+      <section class="details diagnostics">
+        <div class="table">
+          <h2>代理状态</h2>
+          <div class="runtime-list" id="runtimeStatus"></div>
+        </div>
+        <div class="table">
+          <h2>Host 统计</h2>
+          <div id="hosts"></div>
+        </div>
+      </section>
+    </section>
+
+    <section class="tab-panel" data-tab-panel="requests">
+      <section class="table recent-panel">
+        <h2>最近请求</h2>
+        <div id="recentRequests"></div>
+      </section>
+    </section>
+
+    <section class="tab-panel" data-tab-panel="usage">
+      <section class="details">
         <div class="table">
           <h2>路由拆分</h2>
           <div id="routes"></div>
@@ -657,13 +775,32 @@ DASHBOARD_HTML = """<!doctype html>
           <div id="models"></div>
         </div>
       </section>
+    </section>
 
-      <section class="table recent-panel layout-widget" data-widget="recent">
-        <button class="drag-handle" type="button" aria-label="拖动最近请求">拖动</button>
-        <h2>最近请求</h2>
-        <div id="recentRequests"></div>
+    <section class="tab-panel" data-tab-panel="whitelist">
+      <section class="table">
+        <h2>Whitelist</h2>
+        <p class="panel-note">白名单命中分析和白名单 UI 管理会放在这里。当前版本先预留独立页签，避免继续挤压总览页。</p>
+        <div class="placeholder-list">
+          <span>候选 Host 分析</span>
+          <span>当前 whitelist.txt 条目</span>
+          <span>添加 / 删除 / 保存 / reload</span>
+        </div>
       </section>
-    </div>
+    </section>
+
+    <section class="tab-panel" data-tab-panel="doctor">
+      <section class="table">
+        <h2>Doctor</h2>
+        <p class="panel-note">启动自检会放在这里：本地端口、Python 路径、Claude transcript、白名单、系统代理和上游代理连通性。</p>
+        <div class="placeholder-list">
+          <span>Proxy 端口与 Dashboard 端口</span>
+          <span>Claude transcript 可读性</span>
+          <span>系统代理与上游代理连通性</span>
+        </div>
+      </section>
+    </section>
+
     <div class="status" id="status">等待刷新</div>
   </main>
   <script>
@@ -671,15 +808,27 @@ DASHBOARD_HTML = """<!doctype html>
     const selectedModels = new Set();
     let layoutEditing = false;
     let draggedWidget = null;
-    const layoutStorageKey = 'smartProxyDashboardLayout.v1';
-    const defaultLayout = ['alerts', 'kpis', 'diagnostics', 'trend', 'details', 'recent'];
+    const layoutStorageKey = 'smartProxyOverviewDashboardLayout.v1';
+    const defaultLayout = ['alerts', 'kpis', 'trend'];
     const layoutRoot = document.getElementById('layoutRoot');
     const layoutToggle = document.getElementById('layoutToggle');
     const resetLayout = document.getElementById('resetLayout');
+    const tabButtons = [...document.querySelectorAll('[data-tab-target]')];
+    const tabPanels = [...document.querySelectorAll('[data-tab-panel]')];
     const fmt = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 });
     const unitFmt = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 });
     const moneyFmt = new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const text = (id, value) => { document.getElementById(id).textContent = value; };
+    const switchTab = target => {
+      tabButtons.forEach(button => {
+        const active = button.dataset.tabTarget === target;
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      tabPanels.forEach(panel => {
+        panel.classList.toggle('active', panel.dataset.tabPanel === target);
+      });
+    };
     const layoutWidgets = () => [...layoutRoot.querySelectorAll('[data-widget]')];
     const normalizeLayout = order => {
       const known = new Set(defaultLayout);
@@ -836,6 +985,32 @@ DASHBOARD_HTML = """<!doctype html>
         `;
       }).join('');
     };
+    const providerSummaryRows = hosts => {
+      const topHosts = (hosts || []).slice(0, 5);
+      if (!topHosts.length) {
+        return '<div class="row"><span>暂无 Provider 数据</span><strong>0</strong></div>';
+      }
+      return topHosts.map(host => {
+        const health = host.health === 'critical'
+          ? '异常'
+          : host.health === 'warning'
+            ? '观察'
+            : '正常';
+        const pillClass = host.health === 'ok' ? 'good' : 'bad';
+        return `
+          <div class="host-row ${host.health === 'ok' ? '' : host.health}">
+            <div class="host-main">
+              <strong>${escapeHtml(host.host || '-')}</strong>
+              <span>成功 ${fmt.format(host.successful_requests || 0)} / 失败 ${fmt.format(host.failed_requests || 0)}</span>
+            </div>
+            <div class="host-meta">
+              <span class="pill ${pillClass}">${health}</span>
+              <span class="pill">建连 ${fmt.format(host.average_connect_latency_ms || host.average_latency_ms || 0)}ms</span>
+            </div>
+          </div>
+        `;
+      }).join('');
+    };
     const recentRows = requests => {
       if (!requests.length) {
         return '<div class="row"><span>暂无请求</span><strong>0</strong></div>';
@@ -866,6 +1041,13 @@ DASHBOARD_HTML = """<!doctype html>
         `;
       }).join('');
     };
+    const anomalyRows = requests => {
+      const anomalies = (requests || []).filter(request => !request.success || request.slow).slice(0, 5);
+      if (!anomalies.length) {
+        return '<div class="row"><span>当前范围内暂无异常请求</span><strong>OK</strong></div>';
+      }
+      return recentRows(anomalies);
+    };
     const runtimeRows = status => {
       const proxyText = status.proxy_enabled === true
         ? '已启用'
@@ -889,6 +1071,18 @@ DASHBOARD_HTML = """<!doctype html>
           <strong>${escapeHtml(value)}</strong>
         </div>
       `).join('');
+    };
+    const updateShellStatus = status => {
+      const proxyChip = document.getElementById('proxyChip');
+      const dashboardChip = document.getElementById('dashboardChip');
+      const upstreamChip = document.getElementById('upstreamChip');
+      proxyChip.textContent = 'Proxy 127.0.0.1:8889';
+      dashboardChip.textContent = 'Dashboard 127.0.0.1:8890';
+      upstreamChip.textContent = status.proxy_enabled
+        ? `Upstream ${status.upstream_proxy || 'enabled'}`
+        : 'Upstream direct';
+      upstreamChip.classList.toggle('good', status.proxy_enabled === true);
+      upstreamChip.classList.toggle('warning', status.proxy_enabled === false);
     };
     const renderModelFilter = models => {
       const filter = document.getElementById('modelFilter');
@@ -994,8 +1188,11 @@ DASHBOARD_HTML = """<!doctype html>
       document.getElementById('routes').innerHTML = rows(Object.entries(p.routes));
       document.getElementById('models').innerHTML = modelRows(u.models);
       document.getElementById('hosts').innerHTML = hostRows(p.hosts || []);
+      document.getElementById('providerSummary').innerHTML = providerSummaryRows(p.hosts || []);
       document.getElementById('recentRequests').innerHTML = recentRows(recentData.requests || []);
+      document.getElementById('recentAnomalies').innerHTML = anomalyRows(recentData.requests || []);
       document.getElementById('runtimeStatus').innerHTML = runtimeRows(runtimeData || {});
+      updateShellStatus(runtimeData || {});
       renderModelFilter(u.models);
       renderTrendChart(trendData.points);
       text('status', `最后刷新 ${new Date().toLocaleTimeString()}`);
@@ -1012,6 +1209,9 @@ DASHBOARD_HTML = """<!doctype html>
     document.getElementById('clearProxy').addEventListener('click', async () => {
       await fetch('/api/clear-proxy-stats', { method: 'POST' });
       refresh();
+    });
+    tabButtons.forEach(button => {
+      button.addEventListener('click', () => switchTab(button.dataset.tabTarget));
     });
     layoutToggle.addEventListener('click', () => {
       setLayoutEditing(!layoutEditing);

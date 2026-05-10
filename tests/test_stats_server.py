@@ -181,6 +181,58 @@ class StatsServerTests(unittest.TestCase):
         self.assertIn("/api/trends", html)
         self.assertIn("clear-proxy-stats", html)
 
+    def test_dashboard_uses_console_tab_shell(self):
+        with TemporaryDirectory() as temp_dir:
+            store = StatsStore(f"{temp_dir}/stats.db")
+
+            status, _headers, body = handle_stats_request(
+                "GET",
+                urlparse("/"),
+                store,
+            )
+
+        html = body.decode("utf-8")
+        self.assertEqual(status, 200)
+        self.assertIn("Smart Proxy Console", html)
+        self.assertIn('id="proxyChip"', html)
+        self.assertIn('id="dashboardChip"', html)
+        self.assertIn('data-tab-target="overview"', html)
+        self.assertIn('data-tab-target="providers"', html)
+        self.assertIn('data-tab-target="requests"', html)
+        self.assertIn('data-tab-target="usage"', html)
+        self.assertIn('data-tab-target="whitelist"', html)
+        self.assertIn('data-tab-target="doctor"', html)
+        self.assertIn("switchTab", html)
+
+    def test_dashboard_places_existing_widgets_in_domain_tabs(self):
+        with TemporaryDirectory() as temp_dir:
+            store = StatsStore(f"{temp_dir}/stats.db")
+
+            status, _headers, body = handle_stats_request(
+                "GET",
+                urlparse("/"),
+                store,
+            )
+
+        html = body.decode("utf-8")
+        self.assertEqual(status, 200)
+        self.assertLess(
+            html.index('data-tab-panel="overview"'),
+            html.index('id="trendChart"'),
+        )
+        self.assertLess(
+            html.index('data-tab-panel="providers"'),
+            html.index('id="runtimeStatus"'),
+        )
+        self.assertLess(
+            html.index('data-tab-panel="requests"'),
+            html.index('id="recentRequests"'),
+        )
+        self.assertLess(
+            html.index('data-tab-panel="usage"'),
+            html.index('id="models"'),
+        )
+
     def test_dashboard_html_renders_model_token_breakdown(self):
         with TemporaryDirectory() as temp_dir:
             store = StatsStore(f"{temp_dir}/stats.db")
@@ -255,8 +307,9 @@ class StatsServerTests(unittest.TestCase):
 
         html = body.decode("utf-8")
         self.assertEqual(status, 200)
-        self.assertLess(html.index('id="runtimeStatus"'), html.index('id="trendChart"'))
-        self.assertLess(html.index('id="hosts"'), html.index('id="trendChart"'))
+        self.assertLess(html.index('data-tab-panel="providers"'), html.index('id="runtimeStatus"'))
+        self.assertLess(html.index('data-tab-panel="providers"'), html.index('id="hosts"'))
+        self.assertLess(html.index('data-tab-panel="overview"'), html.index('id="trendChart"'))
 
     def test_dashboard_supports_editable_local_layout(self):
         with TemporaryDirectory() as temp_dir:
@@ -275,10 +328,8 @@ class StatsServerTests(unittest.TestCase):
         self.assertIn('id="layoutRoot"', html)
         self.assertIn('data-widget="alerts"', html)
         self.assertIn('data-widget="kpis"', html)
-        self.assertIn('data-widget="diagnostics"', html)
         self.assertIn('data-widget="trend"', html)
-        self.assertIn('data-widget="details"', html)
-        self.assertIn('data-widget="recent"', html)
+        self.assertIn("smartProxyOverviewDashboardLayout", html)
         self.assertIn("layoutStorageKey", html)
         self.assertIn("localStorage.setItem(layoutStorageKey", html)
         self.assertIn("setLayoutEditing", html)
