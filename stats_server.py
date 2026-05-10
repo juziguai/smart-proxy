@@ -740,9 +740,9 @@ DASHBOARD_HTML = """<!doctype html>
       padding: 18px 28px 30px;
     }
     .health-banner {
-      display: flex;
+      display: grid;
+      grid-template-columns: minmax(280px, 1fr) auto minmax(280px, 0.8fr);
       align-items: center;
-      justify-content: space-between;
       gap: 18px;
       min-height: 52px;
       border: 1px solid #cbe9d6;
@@ -787,6 +787,24 @@ DASHBOARD_HTML = """<!doctype html>
       font-weight: 900;
       white-space: nowrap;
     }
+    .health-banner .alert-list {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      min-width: 0;
+      overflow: hidden;
+    }
+    .health-banner .alert-chip {
+      max-width: 280px;
+      background: #fff1dc;
+      color: #c46206;
+      font-size: 12px;
+      padding: 7px 12px;
+    }
+    .health-banner .alert-chip.alert-overflow {
+      background: #eef4ff;
+      color: var(--blue);
+    }
     .grid {
       grid-template-columns: repeat(5, minmax(180px, 1fr));
       gap: 14px;
@@ -795,6 +813,7 @@ DASHBOARD_HTML = """<!doctype html>
       display: grid;
       grid-template-columns: 50px minmax(0, 1fr);
       column-gap: 16px;
+      align-items: center;
       min-height: 118px;
       border: 1px solid #e3e8f0;
       border-top: 1px solid #e3e8f0;
@@ -820,10 +839,15 @@ DASHBOARD_HTML = """<!doctype html>
     }
     .metric-card .value {
       font-size: 27px;
+      line-height: 1.05;
       margin-bottom: 7px;
+      overflow: visible;
+      white-space: nowrap;
     }
     .metric-card .sub {
       font-size: 12px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
     }
     .metric-card .metric-change {
       color: #2ca95f;
@@ -931,6 +955,15 @@ DASHBOARD_HTML = """<!doctype html>
       gap: 10px;
       font-weight: 950;
     }
+    .provider-title {
+      display: grid;
+      gap: 2px;
+    }
+    .provider-subtitle {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 750;
+    }
     .provider-logo {
       display: grid;
       place-items: center;
@@ -1003,6 +1036,14 @@ DASHBOARD_HTML = """<!doctype html>
       .overview-main,
       .bottom-grid {
         grid-template-columns: 1fr;
+      }
+      .health-banner {
+        grid-template-columns: 1fr;
+        align-items: flex-start;
+        padding: 14px 18px;
+      }
+      .health-banner .alert-list {
+        justify-content: flex-start;
       }
       .topbar {
         height: auto;
@@ -1330,7 +1371,14 @@ DASHBOARD_HTML = """<!doctype html>
       const element = document.getElementById(id);
       element.textContent = value;
       element.title = title || value;
-      element.style.fontSize = value.length >= 9 ? '34px' : value.length >= 7 ? '38px' : '';
+      element.style.fontSize = fitMetricValue(value);
+    };
+    const fitMetricValue = value => {
+      const textValue = String(value);
+      if (textValue.length >= 10) return '24px';
+      if (textValue.length >= 8) return '26px';
+      if (textValue.length >= 7) return '28px';
+      return '';
     };
     const percent = value => `${Math.round(value * 100)}%`;
     const compactNumber = value => {
@@ -1386,12 +1434,19 @@ DASHBOARD_HTML = """<!doctype html>
       if (!alerts.length) {
         return '<span class="alert-chip">当前范围内暂无异常</span>';
       }
-      return alerts.map(alert => `
+      const visibleAlerts = alerts.slice(0, 2).map(alert => `
         <span class="alert-chip ${escapeHtml(alert.severity || 'warning')}" title="${escapeHtml(alert.message || '')}">
           ${escapeHtml(alert.message || alert.kind || '异常')}
         </span>
-      `).join('');
+      `);
+      if (alerts.length > 2) {
+        visibleAlerts.push(alertOverflowChip(alerts.length - 2));
+      }
+      return visibleAlerts.join('');
     };
+    const alertOverflowChip = count => `
+      <span class="alert-chip alert-overflow" title="还有 ${fmt.format(count)} 条异常">+${fmt.format(count)}</span>
+    `;
     const renderAlerts = proxy => {
       const alerts = proxy.alerts || [];
       const panel = document.getElementById('alertsPanel');
@@ -1470,35 +1525,90 @@ DASHBOARD_HTML = """<!doctype html>
         `;
       }).join('');
     };
+    const providerMeta = host => {
+      const value = String(host || '').toLowerCase();
+      if (value.includes('minimax')) return { key: 'minimax', name: 'MiniMax', logo: 'M', color: '#ff5b7f' };
+      if (value.includes('deepseek')) return { key: 'deepseek', name: 'DeepSeek', logo: 'D', color: '#536dff' };
+      if (value.includes('xiaomimimo') || value.includes('mimo')) return { key: 'mimo', name: 'MiMo', logo: 'Mi', color: '#111827' };
+      if (value.includes('github')) return { key: 'github', name: 'GitHub', logo: 'G', color: '#24292f' };
+      if (value.includes('anthropic')) return { key: 'anthropic', name: 'Anthropic', logo: 'A', color: '#8a5a44' };
+      if (value.includes('douyin')) return { key: 'douyin', name: 'Douyin', logo: 'Dy', color: '#ff7a1a' };
+      const name = (host || 'Other').split('.').slice(-2, -1)[0] || 'Other';
+      return { key: value || 'other', name, logo: name.slice(0, 2).toUpperCase(), color: '#64748b' };
+    };
+    const providerGroups = hosts => {
+      const groups = new Map();
+      (hosts || []).forEach(host => {
+        const meta = providerMeta(host.host);
+        if (!groups.has(meta.key)) {
+          groups.set(meta.key, {
+            ...meta,
+            hosts: [],
+            total_requests: 0,
+            successful_requests: 0,
+            failed_requests: 0,
+            slow_requests: 0,
+            latency_sum: 0,
+          });
+        }
+        const group = groups.get(meta.key);
+        const requestCount = host.total_requests || 0;
+        group.hosts.push(host.host || '-');
+        group.total_requests += requestCount;
+        group.successful_requests += host.successful_requests || 0;
+        group.failed_requests += host.failed_requests || 0;
+        group.slow_requests += host.slow_requests || 0;
+        group.latency_sum += (host.average_connect_latency_ms || host.average_latency_ms || 0) * requestCount;
+      });
+      return [...groups.values()]
+        .map(group => {
+          group.success_rate = group.total_requests ? group.successful_requests / group.total_requests : 0;
+          group.failure_rate = group.total_requests ? group.failed_requests / group.total_requests : 0;
+          group.average_connect_latency_ms = group.total_requests ? Math.round(group.latency_sum / group.total_requests) : 0;
+          group.health = group.failure_rate >= 0.5 || group.slow_requests >= 3
+            ? 'warning'
+            : group.failure_rate >= 0.1 || group.slow_requests > 0
+              ? 'warning'
+              : 'ok';
+          return group;
+        })
+        .sort((a, b) => b.total_requests - a.total_requests);
+    };
     const providerHealthTable = hosts => {
-      const topHosts = (hosts || []).slice(0, 6);
-      if (!topHosts.length) {
+      const groups = providerGroups(hosts).slice(0, 6);
+      if (!groups.length) {
         return '<div class="table-empty">暂无 Provider 数据</div>';
       }
-      const rows = topHosts.map(host => {
-        const health = host.health === 'critical'
-          ? '异常'
-          : host.health === 'warning'
-            ? '观察'
-            : '正常';
-        const badgeClass = host.health === 'ok' ? 'good' : host.health === 'warning' ? 'warn' : 'bad';
+      const rows = groups.map(group => {
+        const health = group.health === 'ok' ? '正常' : '观察';
+        const badgeClass = group.health === 'ok' ? 'good' : 'warn';
+        const subtitle = group.hosts.slice(0, 2).join(' / ');
         return `
           <tr>
-            <td><strong>${escapeHtml(host.host || '-')}</strong></td>
+            <td>
+              <div class="provider-name">
+                <span class="provider-logo" style="background:${escapeHtml(group.color)}">${escapeHtml(group.logo)}</span>
+                <span class="provider-title">
+                  <strong>${escapeHtml(group.name)}</strong>
+                  <span class="provider-subtitle">${escapeHtml(subtitle)}</span>
+                </span>
+              </div>
+            </td>
             <td><span class="status-badge ${badgeClass}">${health}</span></td>
-            <td>${fmt.format(host.total_requests || 0)}</td>
-            <td>${percent(host.failure_rate || 0)}</td>
-            <td>${fmt.format(host.average_connect_latency_ms || host.average_latency_ms || 0)}ms</td>
+            <td>${successRateText(group.success_rate)}</td>
+            <td>${fmt.format(group.total_requests || 0)}</td>
+            <td>${fmt.format(group.average_connect_latency_ms || 0)}ms</td>
           </tr>
         `;
       }).join('');
       return `
         <table class="provider-table">
-          <thead><tr><th>Provider</th><th>状态</th><th>请求</th><th>失败率</th><th>建连</th></tr></thead>
+          <thead><tr><th>Provider</th><th>状态</th><th>成功率</th><th>请求</th><th>建连</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       `;
     };
+    const successRateText = value => `${(value * 100).toFixed(2)}%`;
     const recentRows = requests => {
       if (!requests.length) {
         return '<div class="row"><span>暂无请求</span><strong>0</strong></div>';
@@ -1668,6 +1778,48 @@ DASHBOARD_HTML = """<!doctype html>
         return `${index ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)}`;
       }).join(' ');
     };
+    const hourKey = value => {
+      const date = new Date(value);
+      return [
+        date.getFullYear(),
+        String(date.getMonth() + 1).padStart(2, '0'),
+        String(date.getDate()).padStart(2, '0'),
+        String(date.getHours()).padStart(2, '0'),
+      ].join('-');
+    };
+    const normalizeTrendPoints = points => {
+      if (currentRange !== 'day') return points;
+      const byHour = new Map((points || []).map(point => [hourKey(point.bucket), point]));
+      const cursor = new Date();
+      cursor.setHours(0, 0, 0, 0);
+      const end = new Date();
+      end.setMinutes(0, 0, 0);
+      const filled = [];
+      while (cursor <= end) {
+        const key = hourKey(cursor);
+        filled.push(byHour.get(key) || {
+          bucket: cursor.toISOString(),
+          proxy_requests: 0,
+          failed_requests: 0,
+          average_latency_ms: 0,
+          average_connect_latency_ms: 0,
+          input_tokens: 0,
+          output_tokens: 0,
+          total_tokens: 0,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+          estimated_cost: 0,
+        });
+        cursor.setHours(cursor.getHours() + 1);
+      }
+      return filled;
+    };
+    const trendLabel = value => {
+      const date = new Date(value);
+      return currentRange === 'day'
+        ? `${String(date.getHours()).padStart(2, '0')}:00`
+        : date.toLocaleDateString();
+    };
     const renderTrendChart = points => {
       const chart = document.getElementById('trendChart');
       if (!points.length) {
@@ -1675,16 +1827,17 @@ DASHBOARD_HTML = """<!doctype html>
         chart.innerHTML = '暂无趋势数据';
         return;
       }
+      const chartPoints = normalizeTrendPoints(points);
       chart.className = 'chart';
       const width = 960;
       const height = 220;
       const pad = 28;
-      const maxTokens = Math.max(...points.map(point => point.total_tokens || 0), 1);
-      const maxCost = Math.max(...points.map(point => point.estimated_cost || 0), 1);
-      const tokenPath = linePath(points, 'total_tokens', width, height, pad, maxTokens);
-      const costPath = linePath(points, 'estimated_cost', width, height, pad, maxCost);
-      const first = new Date(points[0].bucket).toLocaleDateString();
-      const last = new Date(points[points.length - 1].bucket).toLocaleDateString();
+      const maxTokens = Math.max(...chartPoints.map(point => point.total_tokens || 0), 1);
+      const maxCost = Math.max(...chartPoints.map(point => point.estimated_cost || 0), 1);
+      const tokenPath = linePath(chartPoints, 'total_tokens', width, height, pad, maxTokens);
+      const costPath = linePath(chartPoints, 'estimated_cost', width, height, pad, maxCost);
+      const first = trendLabel(chartPoints[0].bucket);
+      const last = trendLabel(chartPoints[chartPoints.length - 1].bucket);
       chart.innerHTML = `
         <svg viewBox="0 0 ${width} ${height}" width="100%" height="220" role="img" aria-label="token and cost trends">
           <line x1="${pad}" y1="${height - pad}" x2="${width - pad}" y2="${height - pad}" stroke="#d7e0ef"/>

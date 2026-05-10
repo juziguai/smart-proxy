@@ -33,6 +33,7 @@ Status legend:
 | 19 | Done | Console tab shell redesign | Dashboard is reorganized into Overview, Providers, Requests, Usage & Cost, Whitelist, and Doctor tabs while preserving existing metrics and overview layout editing | Server HTML tests cover tab shell, status chips, domain tab placement, and existing dashboard render hooks |
 | 20 | Done | Reference console visual alignment | Dashboard shell now matches the approved reference: flat full-width topbar, underline tabs, green health banner, 5 KPI cards, trend + Provider health grid, and bottom anomaly/request tables | Added reference-layout HTML test; full test suite passes; live dashboard screenshot captured at `logs/dashboard-reference-match.png` |
 | 21 | Done | Local day timezone filter fix | Day/week/month filters compare timestamp values after timezone normalization so UTC-stored events after local midnight appear in today's dashboard | Added regression test for UTC events inside China local day; full test suite passes; live screenshot captured at `logs/dashboard-data-restored.png` |
+| 22 | Done | Dense data visual polish | Dashboard handles real high-volume data better: KPI values fit cards, alert chips collapse with `+N`, Provider health groups hosts into provider rows, and day trend fills hourly buckets | Added dense-layout HTML test; full suite passes; live screenshot captured at `logs/dashboard-polished-reference-2.png` |
 
 ## Current Decision Log
 

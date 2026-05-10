@@ -231,6 +231,27 @@ class StatsServerTests(unittest.TestCase):
         self.assertIn('id="recentAnomaliesTable"', html)
         self.assertIn('id="recentRequestsTable"', html)
 
+    def test_dashboard_handles_dense_real_data_layout(self):
+        with TemporaryDirectory() as temp_dir:
+            store = StatsStore(f"{temp_dir}/stats.db")
+
+            status, _headers, body = handle_stats_request(
+                "GET",
+                urlparse("/"),
+                store,
+            )
+
+        html = body.decode("utf-8")
+        self.assertEqual(status, 200)
+        self.assertIn("fitMetricValue", html)
+        self.assertIn("alertOverflowChip", html)
+        self.assertIn("providerGroups", html)
+        self.assertIn("provider-logo", html)
+        self.assertIn("provider-subtitle", html)
+        self.assertIn("successRateText", html)
+        self.assertIn("normalizeTrendPoints", html)
+        self.assertIn("metric-card .value", html)
+
     def test_dashboard_places_existing_widgets_in_domain_tabs(self):
         with TemporaryDirectory() as temp_dir:
             store = StatsStore(f"{temp_dir}/stats.db")
