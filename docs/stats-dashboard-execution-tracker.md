@@ -26,6 +26,7 @@ Status legend:
 | 12 | Done | Model leaderboard enhancement | Model split rows show total tokens plus input, output, cache read, and cache write breakdowns sorted by total tokens | Dashboard HTML contains model detail renderer; stats server tests and full suite pass; live dashboard serves updated HTML |
 | 13 | Done | Cost estimate and trend chart | DeepSeek API usage is priced from official per-million-token rates; token-plan models are excluded from cash API spend; `/api/trends` powers token/cost chart | Pricing, summary, trends, API, and dashboard tests pass; full suite passes |
 | 14 | Done | Trend filtering and KPI display polish | Dashboard rounds displayed costs to two decimals, adjusts KPI font size for long values, and supports multi-select model trend filtering | Store/server tests cover filtered trends; full suite passes |
+| 15 | Done | Proxy diagnostics panels | Dashboard adds runtime proxy status, Host breakdown, and latest proxy request list backed by `/api/runtime-status` and `/api/recent-requests` | Full suite passes; live endpoints return runtime status and recent request data; dashboard HTML contains new renderers |
 
 ## Current Decision Log
 
@@ -40,6 +41,7 @@ Status legend:
 | Headline token total | `input_tokens + output_tokens` |
 | Cache tokens | Display separately as cache read and cache write |
 | API cost estimate | DeepSeek API models are billable; MiniMax/MiMo token-plan models are non-billable in this dashboard |
+| Diagnostics panels | Runtime status, Host ranking, and recent requests are displayed in the local dashboard |
 
 ## Update Rule
 

@@ -26,6 +26,7 @@ smart-proxy 在 Claude Code 和网络之间加了一层薄薄的本地代理（s
 <tr><td><b>零依赖</b></td><td>纯 Python 标准库，无需安装第三方包</td></tr>
 <tr><td><b>透明转发</b></td><td>不解密 TLS，纯字节管道转发，附加延迟 < 1ms</td></tr>
 <tr><td><b>自动守护</b></td><td>启动脚本自动检测并拉起 sidecar，无需手动管理</td></tr>
+<tr><td><b>本地统计面板</b></td><td>内置 Web UI，展示请求、token、费用、趋势、Host 排名、最近请求和运行状态</td></tr>
 <tr><td><b>兼容性强</b></td><td>不依赖特定代理软件，支持 v2rayA、Clash、SSR 等</td></tr>
 </table>
 
@@ -140,7 +141,7 @@ start "" "<项目路径>\start-proxy.vbs"
 │                                                                       │
 │  smart-proxy.py 同一进程内提供：                                        │
 │       ├─ 127.0.0.1:8889  代理服务                                      │
-│       └─ 127.0.0.1:8890  dashboard + /api/summary                      │
+│       └─ 127.0.0.1:8890  dashboard + stats/diagnostics API             │
 │                                                                       │
 └───────────────────────────────────────────────────────────────────────┘
 
@@ -163,7 +164,8 @@ start "" "<项目路径>\start-proxy.vbs"
 │       ├─ 总请求数 / 成功率 / 平均延迟 / 路由拆分                       │
 │       ├─ 总 token / 输入 / 输出 / cache read / cache write             │
 │       ├─ 模型榜单：按模型展示 total、input、output、cache read/write   │
-│       └─ 预估费用与 token/费用趋势图                                    │
+│       ├─ 预估费用与 token/费用趋势图                                    │
+│       └─ Host 统计 / 最近请求 / 当前代理运行状态                       │
 │                                                                       │
 │  说明：smart-proxy 不解密 HTTPS，不读取 API key；token 来自 Claude Code │
 │  已写入本地 transcript 的 usage 字段。                                  │
@@ -226,6 +228,9 @@ smart-proxy 会在同一个 Python 进程里同时启动两个本地服务：
 - 模型拆分榜单：按模型展示总 token、输入、输出、cache read、cache write
 - API 预估费用：DeepSeek API 模型按官方价格估算，套餐模型标记为套餐内
 - 趋势图：默认展示全部模型的 token 与预估费用走势，也支持多选模型后查看筛选后的趋势
+- 代理状态：当前 Windows 系统代理是否启用、上游代理地址、白名单路径、白名单条目数和加载时间
+- Host 统计：按域名展示请求次数、成功/失败、平均延迟和路由构成，方便定位慢请求或失败集中在哪个上游
+- 最近请求：展示最新代理事件的 host、方法、路由、成功状态、延迟和错误信息
 - 日 / 周 / 月 / 全部范围切换
 - 清除 smart-proxy 请求统计按钮
 

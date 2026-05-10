@@ -105,6 +105,65 @@ class StatsStoreTests(unittest.TestCase):
         self.assertEqual(summary["proxy"]["average_latency_ms"], 50)
         self.assertEqual(summary["proxy"]["routes"], {"proxy": 1})
 
+    def test_proxy_summary_includes_host_breakdown(self):
+        tmp_path = self.enterContext(TemporaryDirectoryPath())
+        store = StatsStore(tmp_path / "stats.db")
+
+        for index, (host, success, latency) in enumerate(
+            (
+                ("api.deepseek.com", True, 100),
+                ("api.deepseek.com", False, 300),
+                ("api.minimaxi.com", True, 50),
+            ),
+            start=1,
+        ):
+            store.record_proxy_request(
+                ProxyRequestEvent(
+                    started_at=iso_at(index),
+                    completed_at=iso_at(index),
+                    method="CONNECT",
+                    host=host,
+                    route="proxy",
+                    success=success,
+                    latency_ms=latency,
+                    error=None if success else "bad gateway",
+                )
+            )
+
+        hosts = store.get_summary("all")["proxy"]["hosts"]
+
+        self.assertEqual(hosts[0]["host"], "api.deepseek.com")
+        self.assertEqual(hosts[0]["total_requests"], 2)
+        self.assertEqual(hosts[0]["failed_requests"], 1)
+        self.assertEqual(hosts[0]["average_latency_ms"], 200)
+        self.assertEqual(hosts[0]["routes"], {"proxy": 2})
+
+    def test_recent_proxy_requests_returns_latest_events(self):
+        tmp_path = self.enterContext(TemporaryDirectoryPath())
+        store = StatsStore(tmp_path / "stats.db")
+
+        for index in range(3):
+            store.record_proxy_request(
+                ProxyRequestEvent(
+                    started_at=iso_at(index + 1),
+                    completed_at=iso_at(index + 1),
+                    method="CONNECT",
+                    host=f"api-{index}.example.com",
+                    route="proxy",
+                    success=index != 2,
+                    latency_ms=100 + index,
+                    error="timeout" if index == 2 else None,
+                )
+            )
+
+        recent = store.get_recent_proxy_requests(limit=2)
+
+        self.assertEqual(len(recent), 2)
+        self.assertEqual(recent[0]["host"], "api-2.example.com")
+        self.assertFalse(recent[0]["success"])
+        self.assertEqual(recent[0]["error"], "timeout")
+        self.assertEqual(recent[1]["host"], "api-1.example.com")
+
     def test_clear_proxy_stats_removes_proxy_events_only(self):
         tmp_path = self.enterContext(TemporaryDirectoryPath())
         store = StatsStore(tmp_path / "stats.db")

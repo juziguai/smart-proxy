@@ -23,7 +23,7 @@ def build_html_response(status, html):
     )
 
 
-def handle_stats_request(method, parsed_url, stats_store):
+def handle_stats_request(method, parsed_url, stats_store, status_provider=None):
     if method == "GET" and parsed_url.path in ("", "/"):
         return build_html_response(200, DASHBOARD_HTML)
 
@@ -40,6 +40,31 @@ def handle_stats_request(method, parsed_url, stats_store):
             200,
             stats_store.get_trends(range_name, models=models),
         )
+
+    if method == "GET" and parsed_url.path == "/api/recent-requests":
+        params = parse_qs(parsed_url.query)
+        raw_limit = (params.get("limit") or ["50"])[0]
+        try:
+            limit = int(raw_limit)
+        except ValueError:
+            limit = 50
+        return build_stats_response(
+            200,
+            {"requests": stats_store.get_recent_proxy_requests(limit=limit)},
+        )
+
+    if method == "GET" and parsed_url.path == "/api/runtime-status":
+        if status_provider is None:
+            status = {
+                "proxy_enabled": None,
+                "upstream_proxy": "",
+                "whitelist_count": 0,
+                "whitelist_path": "",
+                "whitelist_loaded_at": "",
+            }
+        else:
+            status = status_provider()
+        return build_stats_response(200, status)
 
     if method == "POST" and parsed_url.path == "/api/clear-proxy-stats":
         stats_store.clear_proxy_stats()
@@ -317,6 +342,86 @@ DASHBOARD_HTML = """<!doctype html>
       color: var(--ink);
       font-weight: 900;
     }
+    .diagnostics {
+      grid-template-columns: minmax(280px, 0.8fr) minmax(360px, 1.2fr);
+    }
+    .recent-panel {
+      margin-top: 18px;
+    }
+    .runtime-list {
+      display: grid;
+      gap: 10px;
+    }
+    .runtime-item {
+      display: grid;
+      grid-template-columns: minmax(96px, 0.8fr) minmax(0, 1.2fr);
+      gap: 12px;
+      align-items: center;
+      border-top: 1px solid #edf1f7;
+      padding: 10px 0;
+      color: var(--muted);
+      font-weight: 700;
+    }
+    .runtime-item strong,
+    .host-main strong,
+    .request-main strong {
+      min-width: 0;
+      color: var(--ink);
+      overflow-wrap: anywhere;
+    }
+    .host-row,
+    .request-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: start;
+      border-top: 1px solid #edf1f7;
+      padding: 12px 0;
+    }
+    .host-main,
+    .request-main {
+      min-width: 0;
+      display: grid;
+      gap: 6px;
+      color: var(--muted);
+      font-weight: 700;
+    }
+    .host-meta,
+    .request-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      width: max-content;
+      max-width: 100%;
+      border-radius: 999px;
+      background: var(--wash);
+      color: #29416d;
+      padding: 5px 9px;
+      font-size: 12px;
+      font-weight: 900;
+      white-space: nowrap;
+    }
+    .pill.good {
+      background: #dff7ee;
+      color: var(--green);
+    }
+    .pill.bad {
+      background: #ffe4e8;
+      color: var(--red);
+    }
+    .request-time {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
     .status {
       margin-top: 18px;
       color: var(--muted);
@@ -329,6 +434,8 @@ DASHBOARD_HTML = """<!doctype html>
       .model-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .trend-head { align-items: flex-start; flex-direction: column; }
       .controls { width: 100%; justify-content: space-between; }
+      .runtime-item, .host-row, .request-row { grid-template-columns: 1fr; }
+      .request-time { white-space: normal; }
     }
   </style>
 </head>
@@ -402,6 +509,22 @@ DASHBOARD_HTML = """<!doctype html>
         <div id="models"></div>
       </div>
     </section>
+
+    <section class="details diagnostics">
+      <div class="table">
+        <h2>代理状态</h2>
+        <div class="runtime-list" id="runtimeStatus"></div>
+      </div>
+      <div class="table">
+        <h2>Host 统计</h2>
+        <div id="hosts"></div>
+      </div>
+    </section>
+
+    <section class="table recent-panel">
+      <h2>最近请求</h2>
+      <div id="recentRequests"></div>
+    </section>
     <div class="status" id="status">等待刷新</div>
   </main>
   <script>
@@ -459,6 +582,85 @@ DASHBOARD_HTML = """<!doctype html>
             <span class="metric">缓存读 <strong>${fmt.format(usage.cache_read_input_tokens)}</strong></span>
             <span class="metric">缓存写 <strong>${fmt.format(usage.cache_creation_input_tokens)}</strong></span>
           </div>
+        </div>
+      `).join('');
+    };
+    const routeText = route => ({
+      proxy: '系统代理',
+      direct: '直连',
+      direct_whitelist: '白名单直连'
+    })[route] || route;
+    const hostRows = hosts => {
+      if (!hosts.length) {
+        return '<div class="row"><span>暂无数据</span><strong>0</strong></div>';
+      }
+      return hosts.map(host => {
+        const routeInfo = Object.entries(host.routes || {})
+          .map(([route, count]) => `${routeText(route)} ${fmt.format(count)}`)
+          .join(' / ');
+        return `
+          <div class="host-row">
+            <div class="host-main">
+              <strong>${escapeHtml(host.host || '-')}</strong>
+              <span>${escapeHtml(routeInfo || '无路由记录')}</span>
+            </div>
+            <div class="host-meta">
+              <span class="pill">${fmt.format(host.total_requests)} 次</span>
+              <span class="pill good">成功 ${fmt.format(host.successful_requests)}</span>
+              <span class="pill bad">失败 ${fmt.format(host.failed_requests)}</span>
+              <span class="pill">${fmt.format(host.average_latency_ms)}ms</span>
+            </div>
+          </div>
+        `;
+      }).join('');
+    };
+    const recentRows = requests => {
+      if (!requests.length) {
+        return '<div class="row"><span>暂无请求</span><strong>0</strong></div>';
+      }
+      return requests.map(request => {
+        const when = request.started_at
+          ? new Date(request.started_at).toLocaleTimeString()
+          : '-';
+        const statusClass = request.success ? 'good' : 'bad';
+        const statusText = request.success ? '成功' : '失败';
+        const error = request.error ? ` / ${request.error}` : '';
+        return `
+          <div class="request-row">
+            <div class="request-main">
+              <strong>${escapeHtml(request.host || '-')}</strong>
+              <span>${escapeHtml(request.method || '-')} · ${escapeHtml(routeText(request.route || '-'))}${escapeHtml(error)}</span>
+            </div>
+            <div class="host-meta">
+              <span class="pill ${statusClass}">${statusText}</span>
+              <span class="pill">${fmt.format(request.latency_ms || 0)}ms</span>
+              <span class="request-time">${escapeHtml(when)}</span>
+            </div>
+          </div>
+        `;
+      }).join('');
+    };
+    const runtimeRows = status => {
+      const proxyText = status.proxy_enabled === true
+        ? '已启用'
+        : status.proxy_enabled === false
+          ? '未启用'
+          : '未知';
+      const upstream = status.upstream_proxy || '直连 / 未检测到系统代理';
+      const whitelistLoadedAt = status.whitelist_loaded_at
+        ? new Date(status.whitelist_loaded_at).toLocaleString()
+        : '尚未加载';
+      const items = [
+        ['系统代理', proxyText],
+        ['上游地址', upstream],
+        ['白名单条目', fmt.format(status.whitelist_count || 0)],
+        ['白名单文件', status.whitelist_path || '-'],
+        ['加载时间', whitelistLoadedAt],
+      ];
+      return items.map(([label, value]) => `
+        <div class="runtime-item">
+          <span>${escapeHtml(label)}</span>
+          <strong>${escapeHtml(value)}</strong>
         </div>
       `).join('');
     };
@@ -536,12 +738,16 @@ DASHBOARD_HTML = """<!doctype html>
       const trendQuery = modelParams
         ? `range=${currentRange}&${modelParams}`
         : `range=${currentRange}`;
-      const [res, trendRes] = await Promise.all([
+      const [res, trendRes, recentRes, runtimeRes] = await Promise.all([
         fetch(`/api/summary?range=${currentRange}`, { cache: 'no-store' }),
         fetch(`/api/trends?${trendQuery}`, { cache: 'no-store' }),
+        fetch('/api/recent-requests?limit=20', { cache: 'no-store' }),
+        fetch('/api/runtime-status', { cache: 'no-store' }),
       ]);
       const data = await res.json();
       const trendData = await trendRes.json();
+      const recentData = await recentRes.json();
+      const runtimeData = await runtimeRes.json();
       const p = data.proxy;
       const u = data.usage;
       setMetric('totalRequests', fmt.format(p.total_requests));
@@ -560,6 +766,9 @@ DASHBOARD_HTML = """<!doctype html>
       text('costSub', `API ${u.cost.billable_models} / 套餐 ${u.cost.token_plan_models} / 未计价 ${u.cost.unknown_models}`);
       document.getElementById('routes').innerHTML = rows(Object.entries(p.routes));
       document.getElementById('models').innerHTML = modelRows(u.models);
+      document.getElementById('hosts').innerHTML = hostRows(p.hosts || []);
+      document.getElementById('recentRequests').innerHTML = recentRows(recentData.requests || []);
+      document.getElementById('runtimeStatus').innerHTML = runtimeRows(runtimeData || {});
       renderModelFilter(u.models);
       renderTrendChart(trendData.points);
       text('status', `最后刷新 ${new Date().toLocaleTimeString()}`);
@@ -585,15 +794,29 @@ DASHBOARD_HTML = """<!doctype html>
 
 
 async def start_stats_server(stats_store, host=DASHBOARD_HOST, port=DASHBOARD_PORT):
+    return await start_stats_server_with_status(stats_store, host, port)
+
+
+async def start_stats_server_with_status(
+    stats_store,
+    host=DASHBOARD_HOST,
+    port=DASHBOARD_PORT,
+    status_provider=None,
+):
     server = await asyncio.start_server(
-        lambda reader, writer: _handle_client(reader, writer, stats_store),
+        lambda reader, writer: _handle_client(
+            reader,
+            writer,
+            stats_store,
+            status_provider,
+        ),
         host,
         port,
     )
     return server
 
 
-async def _handle_client(reader, writer, stats_store):
+async def _handle_client(reader, writer, stats_store, status_provider=None):
     try:
         request_line = await asyncio.wait_for(reader.readline(), timeout=5)
         if not request_line:
@@ -613,6 +836,7 @@ async def _handle_client(reader, writer, stats_store):
             method,
             urlparse(target),
             stats_store,
+            status_provider=status_provider,
         )
         reason = {
             200: "OK",

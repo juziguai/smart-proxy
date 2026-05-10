@@ -2,6 +2,7 @@ import asyncio
 import importlib.util
 from pathlib import Path
 import subprocess
+from tempfile import TemporaryDirectory
 import unittest
 
 
@@ -182,6 +183,55 @@ class ProxyTelemetryTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(event.success)
         self.assertEqual(event.error, "boom")
         self.assertGreaterEqual(event.latency_ms, 0)
+
+
+class RuntimeStatusTests(unittest.TestCase):
+    def test_whitelist_tracks_loaded_metadata(self):
+        tmp_dir = self.enterContext(TemporaryDirectory())
+        tmp_path = Path(tmp_dir)
+        whitelist_path = tmp_path / "whitelist.txt"
+        whitelist_path.write_text(
+            "# comment\napi.deepseek.com\n\n*.minimaxi.com\n",
+            encoding="utf-8",
+        )
+        whitelist = smart_proxy.Whitelist(str(whitelist_path), 60)
+
+        whitelist.refresh_if_needed()
+
+        self.assertEqual(whitelist.pattern_count, 2)
+        self.assertEqual(whitelist.path, str(whitelist_path))
+        self.assertTrue(whitelist.loaded_at)
+
+    def test_runtime_status_reports_proxy_and_whitelist_metadata(self):
+        class RuntimeWhitelist:
+            path = "D:\\Tools\\AI\\Claude-code\\smart-proxy\\whitelist.txt"
+            pattern_count = 3
+            loaded_at = "2026-05-10T12:00:00+00:00"
+
+            def __init__(self):
+                self.refreshed = False
+
+            def refresh_if_needed(self):
+                self.refreshed = True
+
+        runtime_whitelist = RuntimeWhitelist()
+        original_cache = smart_proxy.proxy_cache
+        original_whitelist = smart_proxy.whitelist
+        try:
+            smart_proxy.proxy_cache = FakeProxyCache(("127.0.0.1", 10808))
+            smart_proxy.whitelist = runtime_whitelist
+
+            status = smart_proxy.build_runtime_status()
+        finally:
+            smart_proxy.proxy_cache = original_cache
+            smart_proxy.whitelist = original_whitelist
+
+        self.assertTrue(runtime_whitelist.refreshed)
+        self.assertTrue(status["proxy_enabled"])
+        self.assertEqual(status["upstream_proxy"], "127.0.0.1:10808")
+        self.assertEqual(status["whitelist_count"], 3)
+        self.assertEqual(status["whitelist_path"], runtime_whitelist.path)
+        self.assertEqual(status["whitelist_loaded_at"], runtime_whitelist.loaded_at)
 
 
 class SetupScriptTests(unittest.TestCase):

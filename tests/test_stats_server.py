@@ -35,6 +35,7 @@ class StatsServerTests(unittest.TestCase):
         payload = json.loads(body.decode("utf-8"))
         self.assertEqual(payload["proxy"]["total_requests"], 1)
         self.assertEqual(payload["proxy"]["routes"], {"proxy": 1})
+        self.assertEqual(payload["proxy"]["hosts"][0]["host"], "api.example.com")
 
     def test_clear_proxy_stats_endpoint_clears_proxy_events(self):
         with TemporaryDirectory() as temp_dir:
@@ -95,6 +96,55 @@ class StatsServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         payload = json.loads(body.decode("utf-8"))
         self.assertEqual(payload["models"], ["a", "b"])
+
+    def test_recent_requests_endpoint_returns_latest_proxy_events(self):
+        with TemporaryDirectory() as temp_dir:
+            store = StatsStore(f"{temp_dir}/stats.db")
+            store.record_proxy_request(
+                ProxyRequestEvent(
+                    started_at="2026-05-10T01:00:00+00:00",
+                    completed_at="2026-05-10T01:00:01+00:00",
+                    method="CONNECT",
+                    host="api.example.com",
+                    route="proxy",
+                    success=False,
+                    latency_ms=100,
+                    error="bad gateway",
+                )
+            )
+
+            status, headers, body = handle_stats_request(
+                "GET",
+                urlparse("/api/recent-requests?limit=5"),
+                store,
+            )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["Content-Type"], "application/json; charset=utf-8")
+        payload = json.loads(body.decode("utf-8"))
+        self.assertEqual(payload["requests"][0]["host"], "api.example.com")
+        self.assertFalse(payload["requests"][0]["success"])
+
+    def test_runtime_status_endpoint_uses_status_provider(self):
+        with TemporaryDirectory() as temp_dir:
+            store = StatsStore(f"{temp_dir}/stats.db")
+
+            status, _headers, body = handle_stats_request(
+                "GET",
+                urlparse("/api/runtime-status"),
+                store,
+                status_provider=lambda: {
+                    "proxy_enabled": True,
+                    "upstream_proxy": "127.0.0.1:10808",
+                    "whitelist_count": 3,
+                },
+            )
+
+        payload = json.loads(body.decode("utf-8"))
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["proxy_enabled"])
+        self.assertEqual(payload["upstream_proxy"], "127.0.0.1:10808")
+        self.assertEqual(payload["whitelist_count"], 3)
 
     def test_unknown_endpoint_returns_404_json(self):
         with TemporaryDirectory() as temp_dir:
@@ -182,6 +232,10 @@ class StatsServerTests(unittest.TestCase):
         self.assertIn("selectedModels", html)
         self.assertIn("renderModelFilter", html)
         self.assertIn("/api/trends", html)
+        self.assertIn("/api/recent-requests", html)
+        self.assertIn("/api/runtime-status", html)
+        self.assertIn("hostRows", html)
+        self.assertIn("recentRows", html)
 
     def test_build_stats_response_encodes_json(self):
         status, headers, body = build_stats_response(201, {"ok": True})

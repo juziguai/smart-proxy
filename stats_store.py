@@ -59,6 +59,49 @@ class StatsStore:
         usage = self._get_usage_summary(since)
         return {"proxy": proxy, "usage": usage}
 
+    def get_recent_proxy_requests(self, limit=50, since=None):
+        limit = max(1, min(int(limit), 200))
+        where = ""
+        params = []
+        if since:
+            where = "WHERE started_at >= ?"
+            params.append(since)
+        params.append(limit)
+
+        with self._connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT
+                    started_at,
+                    completed_at,
+                    method,
+                    host,
+                    route,
+                    success,
+                    latency_ms,
+                    error
+                FROM proxy_requests
+                {where}
+                ORDER BY started_at DESC, id DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+
+        return [
+            {
+                "started_at": row["started_at"],
+                "completed_at": row["completed_at"],
+                "method": row["method"],
+                "host": row["host"],
+                "route": row["route"],
+                "success": bool(row["success"]),
+                "latency_ms": int(row["latency_ms"]),
+                "error": row["error"],
+            }
+            for row in rows
+        ]
+
     def get_trends(self, range_name, now=None, since=None, models=None):
         since = since or self._since_for_range(range_name, now)
         interval = "hour" if range_name == "day" else "day"
@@ -202,6 +245,23 @@ class StatsStore:
                 """,
                 params,
             ).fetchall()
+            host_rows = conn.execute(
+                f"""
+                SELECT
+                    host,
+                    route,
+                    COUNT(*) AS total_requests,
+                    COALESCE(SUM(success), 0) AS successful_requests,
+                    COALESCE(SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END), 0)
+                        AS failed_requests,
+                    COALESCE(AVG(latency_ms), 0) AS average_latency_ms
+                FROM proxy_requests
+                {where}
+                GROUP BY host, route
+                ORDER BY COUNT(*) DESC, AVG(latency_ms) DESC
+                """,
+                params,
+            ).fetchall()
 
         total_requests = int(row["total_requests"])
         successful_requests = int(row["successful_requests"])
@@ -209,6 +269,46 @@ class StatsStore:
         average_latency_ms = int(row["average_latency_ms"])
         success_rate = (
             successful_requests / total_requests if total_requests else 0
+        )
+
+        hosts = {}
+        for host_row in host_rows:
+            host = host_row["host"]
+            if host not in hosts:
+                hosts[host] = {
+                    "host": host,
+                    "total_requests": 0,
+                    "successful_requests": 0,
+                    "failed_requests": 0,
+                    "_latency_weighted_sum": 0,
+                    "average_latency_ms": 0,
+                    "routes": {},
+                }
+            item = hosts[host]
+            route_count = int(host_row["total_requests"])
+            item["total_requests"] += route_count
+            item["successful_requests"] += int(host_row["successful_requests"])
+            item["failed_requests"] += int(host_row["failed_requests"])
+            item["_latency_weighted_sum"] += (
+                int(host_row["average_latency_ms"]) * route_count
+            )
+            item["routes"][host_row["route"]] = route_count
+
+        host_breakdown = []
+        for item in hosts.values():
+            if item["total_requests"]:
+                item["average_latency_ms"] = int(
+                    item["_latency_weighted_sum"] / item["total_requests"]
+                )
+            del item["_latency_weighted_sum"]
+            host_breakdown.append(item)
+        host_breakdown.sort(
+            key=lambda item: (
+                item["failed_requests"],
+                item["average_latency_ms"],
+                item["total_requests"],
+            ),
+            reverse=True,
         )
 
         return {
@@ -221,6 +321,7 @@ class StatsStore:
                 route_row["route"]: int(route_row["count"])
                 for route_row in route_rows
             },
+            "hosts": host_breakdown[:20],
         }
 
     def _get_usage_summary(self, since):

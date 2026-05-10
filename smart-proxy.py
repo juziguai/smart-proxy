@@ -8,7 +8,11 @@ import time
 import winreg
 
 from stats_store import ProxyRequestEvent, StatsStore
-from stats_server import DASHBOARD_HOST, DASHBOARD_PORT, start_stats_server
+from stats_server import (
+    DASHBOARD_HOST,
+    DASHBOARD_PORT,
+    start_stats_server_with_status,
+)
 from usage_ingestion import run_usage_ingestion_loop
 
 LISTEN_HOST = "127.0.0.1"
@@ -82,6 +86,7 @@ class Whitelist:
         self._interval = reload_interval
         self._expires = 0
         self._patterns = set()
+        self._loaded_at = ""
 
     def _load(self):
         try:
@@ -92,18 +97,48 @@ class Whitelist:
                 }
         except FileNotFoundError:
             self._patterns = set()
+        self._loaded_at = datetime.now(timezone.utc).isoformat()
 
-    def match(self, host):
+    def refresh_if_needed(self):
         now = time.monotonic()
         if now >= self._expires:
             self._load()
             self._expires = now + self._interval
+
+    def match(self, host):
+        self.refresh_if_needed()
         if not self._patterns:
             return False
         return any(fnmatch.fnmatch(host, p) for p in self._patterns)
 
+    @property
+    def path(self):
+        return self._path
+
+    @property
+    def pattern_count(self):
+        return len(self._patterns)
+
+    @property
+    def loaded_at(self):
+        return self._loaded_at
+
 
 whitelist = Whitelist(WHITELIST_FILE, WHITELIST_RELOAD_SEC)
+
+
+def build_runtime_status():
+    upstream = proxy_cache.get()
+    whitelist.refresh_if_needed()
+    return {
+        "proxy_enabled": upstream is not None,
+        "upstream_proxy": (
+            f"{upstream[0]}:{upstream[1]}" if upstream else ""
+        ),
+        "whitelist_count": whitelist.pattern_count,
+        "whitelist_path": whitelist.path,
+        "whitelist_loaded_at": whitelist.loaded_at,
+    }
 
 
 def extract_host(target, headers_data):
@@ -389,10 +424,11 @@ async def main():
     global stats_store
     stats_store = StatsStore(STATS_DB_FILE)
     server = await asyncio.start_server(handle, LISTEN_HOST, LISTEN_PORT)
-    dashboard = await start_stats_server(
+    dashboard = await start_stats_server_with_status(
         stats_store,
         DASHBOARD_HOST,
         DASHBOARD_PORT,
+        status_provider=build_runtime_status,
     )
     log(f"listening {LISTEN_HOST}:{LISTEN_PORT}  |  mode: auto-detect Windows system proxy  |  cache: {CACHE_SEC}s")
     log(f"dashboard http://{DASHBOARD_HOST}:{DASHBOARD_PORT}")

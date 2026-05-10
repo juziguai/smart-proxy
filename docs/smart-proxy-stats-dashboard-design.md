@@ -251,6 +251,9 @@ Suggested endpoints:
 ```text
 GET  /                 dashboard HTML
 GET  /api/summary?range=day|week|month|all
+GET  /api/trends?range=day|week|month|all&model=<name>
+GET  /api/recent-requests?limit=50
+GET  /api/runtime-status
 POST /api/clear-proxy-stats
 POST /api/rebuild-usage-cache
 ```
@@ -309,6 +312,14 @@ V1 layout should be practical rather than decorative:
   label it as an estimate rather than the provider's final bill.
 - Trend chart: show token and estimated cost movement for the selected range.
   It defaults to all models and supports multi-select model filtering.
+- Runtime status panel: show whether Windows system proxy is currently enabled,
+  the detected upstream proxy, whitelist path, whitelist entry count, and the
+  latest whitelist load timestamp.
+- Host diagnostics: rank recent hosts by failures, latency, and request count;
+  show route composition so it is clear whether a host is going direct,
+  whitelist-direct, or through the upstream proxy.
+- Recent request list: show the latest proxy events with host, method, route,
+  success state, latency, timestamp, and error text when present.
 - Range selector: day/week/month/all.
 - Clear button: clears only smart-proxy request statistics by default.
 
