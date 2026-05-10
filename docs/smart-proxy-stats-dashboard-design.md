@@ -312,14 +312,20 @@ V1 layout should be practical rather than decorative:
   label it as an estimate rather than the provider's final bill.
 - Trend chart: show token and estimated cost movement for the selected range.
   It defaults to all models and supports multi-select model filtering.
+- Alert strip: summarize current-range failures and slow requests above the KPI
+  cards without hiding the rest of the dashboard. The first implementation uses
+  built-in conservative thresholds: slow request `>= 3000ms`, Host warning
+  failure rate `>= 10%`, and critical Host failure rate `>= 50%`.
 - Runtime status panel: show whether Windows system proxy is currently enabled,
   the detected upstream proxy, whitelist path, whitelist entry count, and the
   latest whitelist load timestamp.
 - Host diagnostics: rank recent hosts by failures, latency, and request count;
-  show route composition so it is clear whether a host is going direct,
-  whitelist-direct, or through the upstream proxy.
+  show route composition, failure rate, slow request count, and health state so
+  it is clear whether a host is going direct, whitelist-direct, or through the
+  upstream proxy.
 - Recent request list: show the latest proxy events with host, method, route,
-  success state, latency, timestamp, and error text when present.
+  success state, latency, timestamp, and error text when present. Failed and
+  slow rows should be visually highlighted.
 - Range selector: day/week/month/all.
 - Clear button: clears only smart-proxy request statistics by default.
 

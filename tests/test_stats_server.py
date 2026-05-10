@@ -36,6 +36,8 @@ class StatsServerTests(unittest.TestCase):
         self.assertEqual(payload["proxy"]["total_requests"], 1)
         self.assertEqual(payload["proxy"]["routes"], {"proxy": 1})
         self.assertEqual(payload["proxy"]["hosts"][0]["host"], "api.example.com")
+        self.assertIn("alerts", payload["proxy"])
+        self.assertIn("alert_counts", payload["proxy"])
 
     def test_clear_proxy_stats_endpoint_clears_proxy_events(self):
         with TemporaryDirectory() as temp_dir:
@@ -124,6 +126,7 @@ class StatsServerTests(unittest.TestCase):
         payload = json.loads(body.decode("utf-8"))
         self.assertEqual(payload["requests"][0]["host"], "api.example.com")
         self.assertFalse(payload["requests"][0]["success"])
+        self.assertFalse(payload["requests"][0]["slow"])
 
     def test_runtime_status_endpoint_uses_status_provider(self):
         with TemporaryDirectory() as temp_dir:
@@ -236,6 +239,9 @@ class StatsServerTests(unittest.TestCase):
         self.assertIn("/api/runtime-status", html)
         self.assertIn("hostRows", html)
         self.assertIn("recentRows", html)
+        self.assertIn("alertRows", html)
+        self.assertIn("alertsPanel", html)
+        self.assertIn("slow-request", html)
 
     def test_build_stats_response_encodes_json(self):
         status, headers, body = build_stats_response(201, {"ok": True})

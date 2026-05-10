@@ -175,6 +175,62 @@ DASHBOARD_HTML = """<!doctype html>
       grid-template-columns: repeat(5, minmax(170px, 1fr));
       gap: 18px;
     }
+    .alerts-panel {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: 14px;
+      align-items: center;
+      border: 1px solid #f1c4a4;
+      border-left: 6px solid var(--orange);
+      border-radius: 18px;
+      background: #fff8ef;
+      margin-bottom: 18px;
+      padding: 14px 16px;
+    }
+    .alerts-panel.clean {
+      border-color: #cceadd;
+      border-left-color: var(--green);
+      background: #f3fbf7;
+    }
+    .alert-title {
+      color: var(--ink);
+      font-size: 14px;
+      font-weight: 900;
+      white-space: nowrap;
+    }
+    .alert-list {
+      min-width: 0;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .alert-chip {
+      min-width: 0;
+      max-width: 100%;
+      border-radius: 999px;
+      background: white;
+      color: #68411e;
+      font-size: 12px;
+      font-weight: 850;
+      overflow: hidden;
+      padding: 6px 10px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .alert-chip.critical {
+      background: #ffe4e8;
+      color: var(--red);
+    }
+    .alert-chip.warning {
+      background: #fff0d8;
+      color: var(--orange);
+    }
+    .alert-count {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 900;
+      white-space: nowrap;
+    }
     .card {
       min-width: 0;
       min-height: 148px;
@@ -378,6 +434,16 @@ DASHBOARD_HTML = """<!doctype html>
       border-top: 1px solid #edf1f7;
       padding: 12px 0;
     }
+    .host-row.warning,
+    .request-row.slow-request {
+      border-left: 4px solid var(--orange);
+      padding-left: 10px;
+    }
+    .host-row.critical,
+    .request-row.failed-request {
+      border-left: 4px solid var(--red);
+      padding-left: 10px;
+    }
     .host-main,
     .request-main {
       min-width: 0;
@@ -434,6 +500,7 @@ DASHBOARD_HTML = """<!doctype html>
       .model-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .trend-head { align-items: flex-start; flex-direction: column; }
       .controls { width: 100%; justify-content: space-between; }
+      .alerts-panel { grid-template-columns: 1fr; }
       .runtime-item, .host-row, .request-row { grid-template-columns: 1fr; }
       .request-time { white-space: normal; }
     }
@@ -458,6 +525,12 @@ DASHBOARD_HTML = """<!doctype html>
         <button class="danger" id="clearProxy">清除统计</button>
       </div>
     </header>
+
+    <section class="alerts-panel clean" id="alertsPanel" aria-live="polite">
+      <div class="alert-title">运行告警</div>
+      <div class="alert-list" id="alertsList"></div>
+      <div class="alert-count" id="alertCount">0 条</div>
+    </section>
 
     <section class="grid">
       <article class="card" style="--accent: var(--blue)">
@@ -590,6 +663,25 @@ DASHBOARD_HTML = """<!doctype html>
       direct: '直连',
       direct_whitelist: '白名单直连'
     })[route] || route;
+    const alertRows = alerts => {
+      if (!alerts.length) {
+        return '<span class="alert-chip">当前范围内暂无异常</span>';
+      }
+      return alerts.map(alert => `
+        <span class="alert-chip ${escapeHtml(alert.severity || 'warning')}" title="${escapeHtml(alert.message || '')}">
+          ${escapeHtml(alert.message || alert.kind || '异常')}
+        </span>
+      `).join('');
+    };
+    const renderAlerts = proxy => {
+      const alerts = proxy.alerts || [];
+      const panel = document.getElementById('alertsPanel');
+      panel.classList.toggle('clean', alerts.length === 0);
+      document.getElementById('alertsList').innerHTML = alertRows(alerts);
+      const counts = proxy.alert_counts || { critical: 0, warning: 0 };
+      document.getElementById('alertCount').textContent =
+        `${alerts.length} 条 · 严重 ${counts.critical || 0} / 提醒 ${counts.warning || 0}`;
+    };
     const hostRows = hosts => {
       if (!hosts.length) {
         return '<div class="row"><span>暂无数据</span><strong>0</strong></div>';
@@ -598,16 +690,22 @@ DASHBOARD_HTML = """<!doctype html>
         const routeInfo = Object.entries(host.routes || {})
           .map(([route, count]) => `${routeText(route)} ${fmt.format(count)}`)
           .join(' / ');
+        const healthClass = host.health === 'critical'
+          ? 'critical'
+          : host.health === 'warning'
+            ? 'warning'
+            : '';
         return `
-          <div class="host-row">
+          <div class="host-row ${healthClass}">
             <div class="host-main">
               <strong>${escapeHtml(host.host || '-')}</strong>
-              <span>${escapeHtml(routeInfo || '无路由记录')}</span>
+              <span>${escapeHtml(routeInfo || '无路由记录')} · 失败率 ${percent(host.failure_rate || 0)}</span>
             </div>
             <div class="host-meta">
               <span class="pill">${fmt.format(host.total_requests)} 次</span>
               <span class="pill good">成功 ${fmt.format(host.successful_requests)}</span>
               <span class="pill bad">失败 ${fmt.format(host.failed_requests)}</span>
+              <span class="pill">慢 ${fmt.format(host.slow_requests || 0)}</span>
               <span class="pill">${fmt.format(host.average_latency_ms)}ms</span>
             </div>
           </div>
@@ -625,8 +723,11 @@ DASHBOARD_HTML = """<!doctype html>
         const statusClass = request.success ? 'good' : 'bad';
         const statusText = request.success ? '成功' : '失败';
         const error = request.error ? ` / ${request.error}` : '';
+        const rowClass = request.success
+          ? (request.slow ? 'slow-request' : '')
+          : 'failed-request';
         return `
-          <div class="request-row">
+          <div class="request-row ${rowClass}">
             <div class="request-main">
               <strong>${escapeHtml(request.host || '-')}</strong>
               <span>${escapeHtml(request.method || '-')} · ${escapeHtml(routeText(request.route || '-'))}${escapeHtml(error)}</span>
@@ -764,6 +865,7 @@ DASHBOARD_HTML = """<!doctype html>
       text('successRate', `成功率 ${percent(p.success_rate)}`);
       setMetric('estimatedCost', money(u.cost.total), `${money(u.cost.total)} CNY`);
       text('costSub', `API ${u.cost.billable_models} / 套餐 ${u.cost.token_plan_models} / 未计价 ${u.cost.unknown_models}`);
+      renderAlerts(p);
       document.getElementById('routes').innerHTML = rows(Object.entries(p.routes));
       document.getElementById('models').innerHTML = modelRows(u.models);
       document.getElementById('hosts').innerHTML = hostRows(p.hosts || []);

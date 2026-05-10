@@ -7,6 +7,11 @@ import sqlite3
 from pricing import aggregate_cost, estimate_usage_cost
 
 
+SLOW_REQUEST_THRESHOLD_MS = 3000
+HOST_FAILURE_RATE_THRESHOLD = 0.10
+HOST_CRITICAL_FAILURE_RATE = 0.50
+
+
 @dataclass(frozen=True)
 class ProxyRequestEvent:
     started_at: str
@@ -97,6 +102,7 @@ class StatsStore:
                 "route": row["route"],
                 "success": bool(row["success"]),
                 "latency_ms": int(row["latency_ms"]),
+                "slow": int(row["latency_ms"]) >= SLOW_REQUEST_THRESHOLD_MS,
                 "error": row["error"],
             }
             for row in rows
@@ -254,13 +260,15 @@ class StatsStore:
                     COALESCE(SUM(success), 0) AS successful_requests,
                     COALESCE(SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END), 0)
                         AS failed_requests,
+                    COALESCE(SUM(CASE WHEN latency_ms >= ? THEN 1 ELSE 0 END), 0)
+                        AS slow_requests,
                     COALESCE(AVG(latency_ms), 0) AS average_latency_ms
                 FROM proxy_requests
                 {where}
                 GROUP BY host, route
                 ORDER BY COUNT(*) DESC, AVG(latency_ms) DESC
                 """,
-                params,
+                [SLOW_REQUEST_THRESHOLD_MS] + params,
             ).fetchall()
 
         total_requests = int(row["total_requests"])
@@ -280,8 +288,12 @@ class StatsStore:
                     "total_requests": 0,
                     "successful_requests": 0,
                     "failed_requests": 0,
+                    "slow_requests": 0,
                     "_latency_weighted_sum": 0,
                     "average_latency_ms": 0,
+                    "failure_rate": 0,
+                    "slow_rate": 0,
+                    "health": "ok",
                     "routes": {},
                 }
             item = hosts[host]
@@ -289,6 +301,7 @@ class StatsStore:
             item["total_requests"] += route_count
             item["successful_requests"] += int(host_row["successful_requests"])
             item["failed_requests"] += int(host_row["failed_requests"])
+            item["slow_requests"] += int(host_row["slow_requests"])
             item["_latency_weighted_sum"] += (
                 int(host_row["average_latency_ms"]) * route_count
             )
@@ -300,6 +313,19 @@ class StatsStore:
                 item["average_latency_ms"] = int(
                     item["_latency_weighted_sum"] / item["total_requests"]
                 )
+                item["failure_rate"] = (
+                    item["failed_requests"] / item["total_requests"]
+                )
+                item["slow_rate"] = (
+                    item["slow_requests"] / item["total_requests"]
+                )
+            if item["failure_rate"] >= HOST_CRITICAL_FAILURE_RATE:
+                item["health"] = "critical"
+            elif (
+                item["failure_rate"] >= HOST_FAILURE_RATE_THRESHOLD
+                or item["slow_requests"] > 0
+            ):
+                item["health"] = "warning"
             del item["_latency_weighted_sum"]
             host_breakdown.append(item)
         host_breakdown.sort(
@@ -310,6 +336,7 @@ class StatsStore:
             ),
             reverse=True,
         )
+        alerts = self._build_proxy_alerts(host_breakdown)
 
         return {
             "total_requests": total_requests,
@@ -322,7 +349,57 @@ class StatsStore:
                 for route_row in route_rows
             },
             "hosts": host_breakdown[:20],
+            "alerts": alerts,
+            "alert_counts": {
+                "critical": sum(
+                    1 for alert in alerts
+                    if alert["severity"] == "critical"
+                ),
+                "warning": sum(
+                    1 for alert in alerts
+                    if alert["severity"] == "warning"
+                ),
+            },
         }
+
+    def _build_proxy_alerts(self, hosts):
+        alerts = []
+        for host in hosts[:10]:
+            if (
+                host["failed_requests"] > 0
+                and host["failure_rate"] >= HOST_FAILURE_RATE_THRESHOLD
+            ):
+                severity = (
+                    "critical"
+                    if host["failure_rate"] >= HOST_CRITICAL_FAILURE_RATE
+                    else "warning"
+                )
+                alerts.append(
+                    {
+                        "severity": severity,
+                        "kind": "host_failures",
+                        "host": host["host"],
+                        "message": (
+                            f"{host['host']} failure rate "
+                            f"{round(host['failure_rate'] * 100)}%"
+                        ),
+                        "value": host["failure_rate"],
+                    }
+                )
+            if host["slow_requests"] > 0:
+                alerts.append(
+                    {
+                        "severity": "warning",
+                        "kind": "slow_requests",
+                        "host": host["host"],
+                        "message": (
+                            f"{host['host']} has {host['slow_requests']} "
+                            f"request(s) >= {SLOW_REQUEST_THRESHOLD_MS}ms"
+                        ),
+                        "value": host["slow_requests"],
+                    }
+                )
+        return alerts[:8]
 
     def _get_usage_summary(self, since):
         where = ""
