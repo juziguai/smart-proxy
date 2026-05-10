@@ -24,7 +24,7 @@ Version 1 should provide:
 - Successful requests
 - Failed requests
 - Success rate
-- Average latency
+- Average connect latency
 - Route counts:
   - direct
   - direct by whitelist
@@ -84,7 +84,9 @@ smart-proxy owns these values because it observes every proxy request it handles
 - target host
 - route decision
 - success/failure
-- latency
+- connect latency: time spent establishing the outbound direct connection or
+  upstream CONNECT tunnel
+- duration: total proxy request/tunnel lifetime
 - bytes relayed if a future phase chooses to count them
 
 This data is generated inside `smart-proxy.py` around:
@@ -144,6 +146,8 @@ CREATE TABLE proxy_requests (
   route TEXT NOT NULL,
   success INTEGER NOT NULL,
   latency_ms INTEGER NOT NULL,
+  connect_latency_ms INTEGER,
+  duration_ms INTEGER,
   error TEXT
 );
 ```
@@ -273,11 +277,20 @@ Responsibility:
 
 - Create a global `StatsStore`.
 - Record request start time in `handle`.
+- Record total duration in `handle`.
 - Determine route:
   - `direct_whitelist`
   - `proxy`
   - `direct`
 - Wrap forwarding calls with success/failure recording.
+- Measure connect latency inside the forwarding function:
+  - direct `CONNECT`: time around opening the target connection
+  - upstream `CONNECT`: time through upstream TCP connect, upstream CONNECT
+    response, and response-header drain
+  - plain HTTP: time around opening the direct/upstream outbound connection
+- Keep `latency_ms` as a legacy column, but dashboard semantics should prefer
+  `connect_latency_ms` for latency and `duration_ms` for long-lived tunnel
+  lifetime.
 - Start a background usage scanner task.
 - Start the dashboard HTTP server in the same Python process.
 - Log both listening addresses on startup.
@@ -304,7 +317,7 @@ can map to `day`, `week`, and `month`.
 V1 layout should be practical rather than decorative:
 
 - Top row: total requests, total tokens, cache/thinking-style bucket, average
-  latency.
+  connect latency, and average duration.
 - Secondary row: success/failure, input/output token split, route split.
 - Model leaderboard: sort models by total `input + output` tokens and show
   each model's input, output, cache read, and cache write counters.
@@ -312,20 +325,23 @@ V1 layout should be practical rather than decorative:
   label it as an estimate rather than the provider's final bill.
 - Trend chart: show token and estimated cost movement for the selected range.
   It defaults to all models and supports multi-select model filtering.
-- Alert strip: summarize current-range failures and slow requests above the KPI
+- Alert strip: summarize current-range failures and slow connect requests above the KPI
   cards without hiding the rest of the dashboard. The first implementation uses
-  built-in conservative thresholds: slow request `>= 3000ms`, Host warning
+  built-in conservative thresholds: slow connect `>= 3000ms`, Host warning
   failure rate `>= 10%`, and critical Host failure rate `>= 50%`.
+  Failure alerts only count failures with non-empty error detail; legacy
+  `success=0` CONNECT rows without errors are retained as raw stats but treated
+  as non-actionable for alerting.
 - Runtime status panel: show whether Windows system proxy is currently enabled,
   the detected upstream proxy, whitelist path, whitelist entry count, and the
   latest whitelist load timestamp.
-- Host diagnostics: rank recent hosts by failures, latency, and request count;
-  show route composition, failure rate, slow request count, and health state so
-  it is clear whether a host is going direct, whitelist-direct, or through the
-  upstream proxy.
+- Host diagnostics: rank recent hosts by failures, connect latency, and request
+  count; show route composition, failure rate, slow connect count, average
+  duration, and health state so it is clear whether a host is going direct,
+  whitelist-direct, or through the upstream proxy.
 - Recent request list: show the latest proxy events with host, method, route,
-  success state, latency, timestamp, and error text when present. Failed and
-  slow rows should be visually highlighted.
+  success state, connect latency, total duration, timestamp, and error text
+  when present. Failed and slow-connect rows should be visually highlighted.
 - Editable layout mode: a global toggle enables module-level drag sorting for
   dashboard sections. When the toggle is off, sections are locked. The first
   version stores the order in browser `localStorage` and provides a restore
@@ -487,7 +503,8 @@ Build V1 as a local observability layer:
 
 - smart-proxy records network/request metrics.
 - a transcript reader records Claude token usage.
-- a dashboard displays both with honest labels.
+- a dashboard displays both with honest labels, separating connect latency from
+  long-lived streaming/tunnel duration.
 
 This gives the useful part of the screenshot without risky TLS interception or
 fragile provider-specific API parsing.

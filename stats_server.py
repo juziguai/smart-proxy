@@ -610,7 +610,7 @@ DASHBOARD_HTML = """<!doctype html>
           <div class="sub" id="cacheSub">读 0 / 写 0</div>
         </article>
         <article class="card" style="--accent: var(--orange)">
-          <div class="label">平均延迟</div>
+          <div class="label">平均建连</div>
           <div class="value" id="avgLatency">0ms</div>
           <div class="sub" id="successRate">成功率 0%</div>
         </article>
@@ -828,8 +828,9 @@ DASHBOARD_HTML = """<!doctype html>
               <span class="pill">${fmt.format(host.total_requests)} 次</span>
               <span class="pill good">成功 ${fmt.format(host.successful_requests)}</span>
               <span class="pill bad">失败 ${fmt.format(host.failed_requests)}</span>
-              <span class="pill">慢 ${fmt.format(host.slow_requests || 0)}</span>
-              <span class="pill">${fmt.format(host.average_latency_ms)}ms</span>
+              <span class="pill">慢建连 ${fmt.format(host.slow_requests || 0)}</span>
+              <span class="pill">建连 ${fmt.format(host.average_connect_latency_ms || host.average_latency_ms || 0)}ms</span>
+              <span class="pill">持续 ${fmt.format(host.average_duration_ms || 0)}ms</span>
             </div>
           </div>
         `;
@@ -857,7 +858,8 @@ DASHBOARD_HTML = """<!doctype html>
             </div>
             <div class="host-meta">
               <span class="pill ${statusClass}">${statusText}</span>
-              <span class="pill">${fmt.format(request.latency_ms || 0)}ms</span>
+              <span class="pill">建连 ${fmt.format(request.connect_latency_ms || 0)}ms</span>
+              <span class="pill">持续 ${fmt.format(request.duration_ms || request.latency_ms || 0)}ms</span>
               <span class="request-time">${escapeHtml(when)}</span>
             </div>
           </div>
@@ -984,8 +986,8 @@ DASHBOARD_HTML = """<!doctype html>
         fmt.format(u.cache_read_input_tokens + u.cache_creation_input_tokens)
       );
       text('cacheSub', `读 ${compactNumber(u.cache_read_input_tokens)} / 写 ${compactNumber(u.cache_creation_input_tokens)}`);
-      setMetric('avgLatency', `${fmt.format(p.average_latency_ms)}ms`);
-      text('successRate', `成功率 ${percent(p.success_rate)}`);
+      setMetric('avgLatency', `${fmt.format(p.average_connect_latency_ms || p.average_latency_ms || 0)}ms`);
+      text('successRate', `成功率 ${percent(p.success_rate)} / 持续 ${fmt.format(p.average_duration_ms || 0)}ms`);
       setMetric('estimatedCost', money(u.cost.total), `${money(u.cost.total)} CNY`);
       text('costSub', `API ${u.cost.billable_models} / 套餐 ${u.cost.token_plan_models} / 未计价 ${u.cost.unknown_models}`);
       renderAlerts(p);

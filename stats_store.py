@@ -22,6 +22,8 @@ class ProxyRequestEvent:
     success: bool
     latency_ms: int
     error: str | None
+    connect_latency_ms: int | None = None
+    duration_ms: int | None = None
 
 
 class StatsStore:
@@ -30,6 +32,16 @@ class StatsStore:
         self._init_schema()
 
     def record_proxy_request(self, event: ProxyRequestEvent):
+        connect_latency_ms = (
+            event.connect_latency_ms
+            if event.connect_latency_ms is not None
+            else event.latency_ms
+        )
+        duration_ms = (
+            event.duration_ms
+            if event.duration_ms is not None
+            else event.latency_ms
+        )
         with self._connection() as conn:
             with conn:
                 conn.execute(
@@ -42,9 +54,11 @@ class StatsStore:
                         route,
                         success,
                         latency_ms,
+                        connect_latency_ms,
+                        duration_ms,
                         error
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         event.started_at,
@@ -54,6 +68,8 @@ class StatsStore:
                         event.route,
                         1 if event.success else 0,
                         event.latency_ms,
+                        connect_latency_ms,
+                        duration_ms,
                         event.error,
                     ),
                 )
@@ -84,6 +100,8 @@ class StatsStore:
                     route,
                     success,
                     latency_ms,
+                    connect_latency_ms,
+                    duration_ms,
                     error
                 FROM proxy_requests
                 {where}
@@ -102,7 +120,16 @@ class StatsStore:
                 "route": row["route"],
                 "success": bool(row["success"]),
                 "latency_ms": int(row["latency_ms"]),
-                "slow": int(row["latency_ms"]) >= SLOW_REQUEST_THRESHOLD_MS,
+                "connect_latency_ms": (
+                    int(row["connect_latency_ms"])
+                    if row["connect_latency_ms"] is not None
+                    else None
+                ),
+                "duration_ms": int(row["duration_ms"]),
+                "slow": (
+                    row["connect_latency_ms"] is not None
+                    and int(row["connect_latency_ms"]) >= SLOW_REQUEST_THRESHOLD_MS
+                ),
                 "error": row["error"],
             }
             for row in rows
@@ -117,8 +144,11 @@ class StatsStore:
         with self._connection() as conn:
             proxy_rows = conn.execute(
                 self._range_query(
-                    """
-                    SELECT started_at, success, latency_ms
+                    f"""
+                    SELECT
+                        started_at,
+                        success,
+                        {self._connect_latency_expr()} AS connect_latency_ms
                     FROM proxy_requests
                     """,
                     "started_at",
@@ -134,7 +164,9 @@ class StatsStore:
             item = self._trend_bucket(buckets, bucket)
             item["proxy_requests"] += 1
             item["failed_requests"] += 0 if row["success"] else 1
-            item["_latency_sum"] += int(row["latency_ms"])
+            if row["connect_latency_ms"] is not None:
+                item["_latency_sum"] += int(row["connect_latency_ms"])
+                item["_latency_count"] += 1
 
         for row in usage_rows:
             bucket = self._bucket_key(row["timestamp"], interval)
@@ -166,11 +198,13 @@ class StatsStore:
         result = []
         for bucket in sorted(buckets):
             item = buckets[bucket]
-            if item["proxy_requests"]:
+            if item["_latency_count"]:
                 item["average_latency_ms"] = int(
-                    item["_latency_sum"] / item["proxy_requests"]
+                    item["_latency_sum"] / item["_latency_count"]
                 )
+                item["average_connect_latency_ms"] = item["average_latency_ms"]
             del item["_latency_sum"]
+            del item["_latency_count"]
             result.append(item)
 
         return {
@@ -226,6 +260,8 @@ class StatsStore:
         if since:
             where = "WHERE started_at >= ?"
             params.append(since)
+        connect_latency_expr = self._connect_latency_expr()
+        duration_expr = "COALESCE(duration_ms, latency_ms)"
 
         with self._connection() as conn:
             row = conn.execute(
@@ -235,7 +271,9 @@ class StatsStore:
                     COALESCE(SUM(success), 0) AS successful_requests,
                     COALESCE(SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END), 0)
                         AS failed_requests,
-                    COALESCE(AVG(latency_ms), 0) AS average_latency_ms
+                    COALESCE(AVG({connect_latency_expr}), 0)
+                        AS average_connect_latency_ms,
+                    COALESCE(AVG({duration_expr}), 0) AS average_duration_ms
                 FROM proxy_requests
                 {where}
                 """,
@@ -260,13 +298,19 @@ class StatsStore:
                     COALESCE(SUM(success), 0) AS successful_requests,
                     COALESCE(SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END), 0)
                         AS failed_requests,
-                    COALESCE(SUM(CASE WHEN latency_ms >= ? THEN 1 ELSE 0 END), 0)
+                    COALESCE(SUM(CASE WHEN success = 0 AND error IS NOT NULL AND error <> '' THEN 1 ELSE 0 END), 0)
+                        AS alert_failed_requests,
+                    COALESCE(SUM(CASE WHEN {connect_latency_expr} >= ? THEN 1 ELSE 0 END), 0)
                         AS slow_requests,
-                    COALESCE(AVG(latency_ms), 0) AS average_latency_ms
+                    COALESCE(AVG({connect_latency_expr}), 0)
+                        AS average_connect_latency_ms,
+                    COALESCE(AVG({duration_expr}), 0) AS average_duration_ms,
+                    COALESCE(SUM(CASE WHEN {connect_latency_expr} IS NOT NULL THEN 1 ELSE 0 END), 0)
+                        AS connect_latency_samples
                 FROM proxy_requests
                 {where}
                 GROUP BY host, route
-                ORDER BY COUNT(*) DESC, AVG(latency_ms) DESC
+                ORDER BY COUNT(*) DESC, AVG({connect_latency_expr}) DESC
                 """,
                 [SLOW_REQUEST_THRESHOLD_MS] + params,
             ).fetchall()
@@ -274,7 +318,9 @@ class StatsStore:
         total_requests = int(row["total_requests"])
         successful_requests = int(row["successful_requests"])
         failed_requests = int(row["failed_requests"])
-        average_latency_ms = int(row["average_latency_ms"])
+        average_connect_latency_ms = int(row["average_connect_latency_ms"])
+        average_duration_ms = int(row["average_duration_ms"])
+        average_latency_ms = average_connect_latency_ms
         success_rate = (
             successful_requests / total_requests if total_requests else 0
         )
@@ -288,10 +334,16 @@ class StatsStore:
                     "total_requests": 0,
                     "successful_requests": 0,
                     "failed_requests": 0,
+                    "alert_failed_requests": 0,
                     "slow_requests": 0,
                     "_latency_weighted_sum": 0,
+                    "_latency_samples": 0,
+                    "_duration_weighted_sum": 0,
                     "average_latency_ms": 0,
+                    "average_connect_latency_ms": 0,
+                    "average_duration_ms": 0,
                     "failure_rate": 0,
+                    "alert_failure_rate": 0,
                     "slow_rate": 0,
                     "health": "ok",
                     "routes": {},
@@ -301,32 +353,50 @@ class StatsStore:
             item["total_requests"] += route_count
             item["successful_requests"] += int(host_row["successful_requests"])
             item["failed_requests"] += int(host_row["failed_requests"])
+            item["alert_failed_requests"] += int(
+                host_row["alert_failed_requests"]
+            )
             item["slow_requests"] += int(host_row["slow_requests"])
+            connect_samples = int(host_row["connect_latency_samples"])
             item["_latency_weighted_sum"] += (
-                int(host_row["average_latency_ms"]) * route_count
+                int(host_row["average_connect_latency_ms"]) * connect_samples
+            )
+            item["_latency_samples"] += connect_samples
+            item["_duration_weighted_sum"] += (
+                int(host_row["average_duration_ms"]) * route_count
             )
             item["routes"][host_row["route"]] = route_count
 
         host_breakdown = []
         for item in hosts.values():
             if item["total_requests"]:
-                item["average_latency_ms"] = int(
-                    item["_latency_weighted_sum"] / item["total_requests"]
+                if item["_latency_samples"]:
+                    item["average_connect_latency_ms"] = int(
+                        item["_latency_weighted_sum"] / item["_latency_samples"]
+                    )
+                    item["average_latency_ms"] = item["average_connect_latency_ms"]
+                item["average_duration_ms"] = int(
+                    item["_duration_weighted_sum"] / item["total_requests"]
                 )
                 item["failure_rate"] = (
                     item["failed_requests"] / item["total_requests"]
                 )
+                item["alert_failure_rate"] = (
+                    item["alert_failed_requests"] / item["total_requests"]
+                )
                 item["slow_rate"] = (
                     item["slow_requests"] / item["total_requests"]
                 )
-            if item["failure_rate"] >= HOST_CRITICAL_FAILURE_RATE:
+            if item["alert_failure_rate"] >= HOST_CRITICAL_FAILURE_RATE:
                 item["health"] = "critical"
             elif (
-                item["failure_rate"] >= HOST_FAILURE_RATE_THRESHOLD
+                item["alert_failure_rate"] >= HOST_FAILURE_RATE_THRESHOLD
                 or item["slow_requests"] > 0
             ):
                 item["health"] = "warning"
             del item["_latency_weighted_sum"]
+            del item["_latency_samples"]
+            del item["_duration_weighted_sum"]
             host_breakdown.append(item)
         host_breakdown.sort(
             key=lambda item: (
@@ -344,6 +414,8 @@ class StatsStore:
             "failed_requests": failed_requests,
             "success_rate": success_rate,
             "average_latency_ms": average_latency_ms,
+            "average_connect_latency_ms": average_connect_latency_ms,
+            "average_duration_ms": average_duration_ms,
             "routes": {
                 route_row["route"]: int(route_row["count"])
                 for route_row in route_rows
@@ -366,12 +438,12 @@ class StatsStore:
         alerts = []
         for host in hosts[:10]:
             if (
-                host["failed_requests"] > 0
-                and host["failure_rate"] >= HOST_FAILURE_RATE_THRESHOLD
+                host["alert_failed_requests"] > 0
+                and host["alert_failure_rate"] >= HOST_FAILURE_RATE_THRESHOLD
             ):
                 severity = (
                     "critical"
-                    if host["failure_rate"] >= HOST_CRITICAL_FAILURE_RATE
+                    if host["alert_failure_rate"] >= HOST_CRITICAL_FAILURE_RATE
                     else "warning"
                 )
                 alerts.append(
@@ -381,9 +453,9 @@ class StatsStore:
                         "host": host["host"],
                         "message": (
                             f"{host['host']} failure rate "
-                            f"{round(host['failure_rate'] * 100)}%"
+                            f"{round(host['alert_failure_rate'] * 100)}%"
                         ),
-                        "value": host["failure_rate"],
+                        "value": host["alert_failure_rate"],
                     }
                 )
             if host["slow_requests"] > 0:
@@ -394,7 +466,7 @@ class StatsStore:
                         "host": host["host"],
                         "message": (
                             f"{host['host']} has {host['slow_requests']} "
-                            f"request(s) >= {SLOW_REQUEST_THRESHOLD_MS}ms"
+                            f"connect(s) >= {SLOW_REQUEST_THRESHOLD_MS}ms"
                         ),
                         "value": host["slow_requests"],
                     }
@@ -525,10 +597,13 @@ class StatsStore:
                         route TEXT NOT NULL,
                         success INTEGER NOT NULL,
                         latency_ms INTEGER NOT NULL,
+                        connect_latency_ms INTEGER,
+                        duration_ms INTEGER,
                         error TEXT
                     )
                     """
                 )
+                self._migrate_proxy_request_columns(conn)
                 conn.execute(
                     """
                     CREATE TABLE IF NOT EXISTS usage_events (
@@ -550,6 +625,43 @@ class StatsStore:
                     )
                     """
                 )
+
+    def _migrate_proxy_request_columns(self, conn):
+        columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(proxy_requests)")
+        }
+        if "connect_latency_ms" not in columns:
+            conn.execute(
+                "ALTER TABLE proxy_requests ADD COLUMN connect_latency_ms INTEGER"
+            )
+            conn.execute(
+                """
+                UPDATE proxy_requests
+                SET connect_latency_ms = latency_ms
+                WHERE method <> 'CONNECT'
+                """
+            )
+        if "duration_ms" not in columns:
+            conn.execute(
+                "ALTER TABLE proxy_requests ADD COLUMN duration_ms INTEGER"
+            )
+            conn.execute(
+                """
+                UPDATE proxy_requests
+                SET duration_ms = latency_ms
+                WHERE duration_ms IS NULL
+                """
+            )
+
+    def _connect_latency_expr(self):
+        return (
+            "CASE "
+            "WHEN connect_latency_ms IS NOT NULL THEN connect_latency_ms "
+            "WHEN method <> 'CONNECT' THEN latency_ms "
+            "ELSE NULL "
+            "END"
+        )
 
     def _since_for_range(self, range_name, now):
         if range_name == "all":
@@ -628,6 +740,7 @@ class StatsStore:
                 "proxy_requests": 0,
                 "failed_requests": 0,
                 "average_latency_ms": 0,
+                "average_connect_latency_ms": 0,
                 "input_tokens": 0,
                 "output_tokens": 0,
                 "total_tokens": 0,
@@ -635,6 +748,7 @@ class StatsStore:
                 "cache_creation_input_tokens": 0,
                 "estimated_cost": 0.0,
                 "_latency_sum": 0,
+                "_latency_count": 0,
             }
         return buckets[bucket]
 

@@ -144,6 +144,45 @@ class ProxyTelemetryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(event.error)
         self.assertGreaterEqual(event.latency_ms, 0)
 
+    async def test_handle_records_connect_latency_and_duration_separately(self):
+        stats_store = FakeStatsStore()
+        client_reader = FakeReader(
+            lines=[
+                b"CONNECT api.example.com:443 HTTP/1.1\r\n",
+                b"\r\n",
+            ]
+        )
+        client_writer = FakeWriter()
+
+        original_cache = smart_proxy.proxy_cache
+        original_whitelist = smart_proxy.whitelist
+        original_stats_store = smart_proxy.stats_store
+        original_connect_via_proxy = smart_proxy.connect_via_proxy
+        try:
+            smart_proxy.proxy_cache = FakeProxyCache(("127.0.0.1", 10090))
+            smart_proxy.whitelist = FakeWhitelist(False)
+            smart_proxy.stats_store = stats_store
+
+            async def fake_connect_via_proxy(client_r, client_w, target, upstream):
+                return smart_proxy.ForwardResult(
+                    success=True,
+                    connect_latency_ms=123,
+                )
+
+            smart_proxy.connect_via_proxy = fake_connect_via_proxy
+
+            await smart_proxy.handle(client_reader, client_writer)
+        finally:
+            smart_proxy.proxy_cache = original_cache
+            smart_proxy.whitelist = original_whitelist
+            smart_proxy.stats_store = original_stats_store
+            smart_proxy.connect_via_proxy = original_connect_via_proxy
+
+        event = stats_store.events[0]
+        self.assertTrue(event.success)
+        self.assertEqual(event.connect_latency_ms, 123)
+        self.assertGreaterEqual(event.duration_ms, 0)
+
     async def test_handle_records_failed_direct_request(self):
         stats_store = FakeStatsStore()
         client_reader = FakeReader(

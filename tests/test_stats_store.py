@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import sqlite3
 import unittest
 
 from claude_usage_reader import UsageEvent
@@ -175,6 +176,155 @@ class StatsStoreTests(unittest.TestCase):
         self.assertEqual(proxy["alert_counts"], {"critical": 0, "warning": 2})
         self.assertEqual(proxy["alerts"][0]["kind"], "host_failures")
         self.assertEqual(proxy["alerts"][1]["kind"], "slow_requests")
+
+    def test_long_connect_tunnel_duration_does_not_mark_slow_request(self):
+        tmp_path = self.enterContext(TemporaryDirectoryPath())
+        store = StatsStore(tmp_path / "stats.db")
+
+        store.record_proxy_request(
+            ProxyRequestEvent(
+                started_at=iso_at(1),
+                completed_at=iso_at(1),
+                method="CONNECT",
+                host="api.deepseek.com",
+                route="proxy",
+                success=True,
+                latency_ms=600_000,
+                error=None,
+                connect_latency_ms=200,
+                duration_ms=600_000,
+            )
+        )
+
+        summary = store.get_summary("all")
+        host = summary["proxy"]["hosts"][0]
+        recent = store.get_recent_proxy_requests(limit=1)[0]
+
+        self.assertEqual(summary["proxy"]["average_latency_ms"], 200)
+        self.assertEqual(summary["proxy"]["average_connect_latency_ms"], 200)
+        self.assertEqual(summary["proxy"]["average_duration_ms"], 600_000)
+        self.assertEqual(host["slow_requests"], 0)
+        self.assertEqual(host["average_connect_latency_ms"], 200)
+        self.assertEqual(host["average_duration_ms"], 600_000)
+        self.assertEqual(summary["proxy"]["alerts"], [])
+        self.assertFalse(recent["slow"])
+        self.assertEqual(recent["connect_latency_ms"], 200)
+        self.assertEqual(recent["duration_ms"], 600_000)
+
+    def test_connect_latency_marks_slow_request(self):
+        tmp_path = self.enterContext(TemporaryDirectoryPath())
+        store = StatsStore(tmp_path / "stats.db")
+
+        store.record_proxy_request(
+            ProxyRequestEvent(
+                started_at=iso_at(1),
+                completed_at=iso_at(1),
+                method="CONNECT",
+                host="api.slow-connect.example.com",
+                route="proxy",
+                success=True,
+                latency_ms=30_000,
+                error=None,
+                connect_latency_ms=3_000,
+                duration_ms=30_000,
+            )
+        )
+
+        summary = store.get_summary("all")
+        host = summary["proxy"]["hosts"][0]
+        recent = store.get_recent_proxy_requests(limit=1)[0]
+
+        self.assertEqual(host["slow_requests"], 1)
+        self.assertEqual(summary["proxy"]["alerts"][0]["kind"], "slow_requests")
+        self.assertTrue(recent["slow"])
+
+    def test_migrated_legacy_connect_duration_does_not_mark_slow_request(self):
+        tmp_path = self.enterContext(TemporaryDirectoryPath())
+        db_path = tmp_path / "stats.db"
+        conn = sqlite3.connect(db_path)
+        try:
+            with conn:
+                conn.execute(
+                    """
+                    CREATE TABLE proxy_requests (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        started_at TEXT NOT NULL,
+                        completed_at TEXT NOT NULL,
+                        method TEXT NOT NULL,
+                        host TEXT NOT NULL,
+                        route TEXT NOT NULL,
+                        success INTEGER NOT NULL,
+                        latency_ms INTEGER NOT NULL,
+                        error TEXT
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    INSERT INTO proxy_requests (
+                        started_at,
+                        completed_at,
+                        method,
+                        host,
+                        route,
+                        success,
+                        latency_ms,
+                        error
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        iso_at(1),
+                        iso_at(1),
+                        "CONNECT",
+                        "api.deepseek.com",
+                        "proxy",
+                        1,
+                        600_000,
+                        None,
+                    ),
+                )
+        finally:
+            conn.close()
+
+        store = StatsStore(db_path)
+        summary = store.get_summary("all")
+        host = summary["proxy"]["hosts"][0]
+        recent = store.get_recent_proxy_requests(limit=1)[0]
+
+        self.assertEqual(summary["proxy"]["average_connect_latency_ms"], 0)
+        self.assertEqual(summary["proxy"]["average_duration_ms"], 600_000)
+        self.assertEqual(host["slow_requests"], 0)
+        self.assertEqual(summary["proxy"]["alerts"], [])
+        self.assertIsNone(recent["connect_latency_ms"])
+        self.assertFalse(recent["slow"])
+
+    def test_failure_alerts_ignore_legacy_failures_without_error_detail(self):
+        tmp_path = self.enterContext(TemporaryDirectoryPath())
+        store = StatsStore(tmp_path / "stats.db")
+
+        for index in range(5):
+            store.record_proxy_request(
+                ProxyRequestEvent(
+                    started_at=iso_at(index + 1),
+                    completed_at=iso_at(index + 1),
+                    method="CONNECT",
+                    host="api.deepseek.com",
+                    route="proxy",
+                    success=False,
+                    latency_ms=600_000,
+                    error=None,
+                    connect_latency_ms=100,
+                    duration_ms=600_000,
+                )
+            )
+
+        summary = store.get_summary("all")
+        host = summary["proxy"]["hosts"][0]
+
+        self.assertEqual(host["failed_requests"], 5)
+        self.assertEqual(host["health"], "ok")
+        self.assertEqual(summary["proxy"]["alerts"], [])
 
     def test_recent_proxy_requests_returns_latest_events(self):
         tmp_path = self.enterContext(TemporaryDirectoryPath())
