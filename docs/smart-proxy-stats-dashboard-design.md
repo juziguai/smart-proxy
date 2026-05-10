@@ -305,6 +305,9 @@ V1 layout should be practical rather than decorative:
 - Secondary row: success/failure, input/output token split, route split.
 - Model leaderboard: sort models by total `input + output` tokens and show
   each model's input, output, cache read, and cache write counters.
+- Estimated API cost: apply local model pricing to usage totals and clearly
+  label it as an estimate rather than the provider's final bill.
+- Trend chart: show token and estimated cost movement for the selected range.
 - Range selector: day/week/month/all.
 - Clear button: clears only smart-proxy request statistics by default.
 
@@ -315,6 +318,10 @@ Terminology:
 - Display total token headline as `input + output`, matching Claude Code's own
   stats UI.
 - Show cache token counts separately.
+- DeepSeek API billed models use official CNY-per-million-token rates from
+  <https://api-docs.deepseek.com/zh-cn/quick_start/pricing/>.
+- MiniMax and MiMo are token-plan models in this setup, so the dashboard should
+  display their tokens but not add them to estimated cash API spend.
 
 ## Performance Design
 

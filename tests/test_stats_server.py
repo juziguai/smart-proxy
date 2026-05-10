@@ -64,6 +64,23 @@ class StatsServerTests(unittest.TestCase):
         self.assertEqual(json.loads(body.decode("utf-8")), {"ok": True})
         self.assertEqual(summary["proxy"]["total_requests"], 0)
 
+    def test_trends_endpoint_returns_json_trends(self):
+        with TemporaryDirectory() as temp_dir:
+            store = StatsStore(f"{temp_dir}/stats.db")
+
+            status, headers, body = handle_stats_request(
+                "GET",
+                urlparse("/api/trends?range=day"),
+                store,
+            )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["Content-Type"], "application/json; charset=utf-8")
+        payload = json.loads(body.decode("utf-8"))
+        self.assertEqual(payload["range"], "day")
+        self.assertEqual(payload["interval"], "hour")
+        self.assertEqual(payload["points"], [])
+
     def test_unknown_endpoint_returns_404_json(self):
         with TemporaryDirectory() as temp_dir:
             store = StatsStore(f"{temp_dir}/stats.db")
@@ -93,6 +110,7 @@ class StatsServerTests(unittest.TestCase):
         self.assertEqual(headers["Content-Type"], "text/html; charset=utf-8")
         self.assertIn("Smart Proxy", html)
         self.assertIn("/api/summary", html)
+        self.assertIn("/api/trends", html)
         self.assertIn("clear-proxy-stats", html)
 
     def test_dashboard_html_renders_model_token_breakdown(self):
@@ -112,6 +130,9 @@ class StatsServerTests(unittest.TestCase):
         self.assertIn("cache_creation_input_tokens", html)
         self.assertIn("输入", html)
         self.assertIn("输出", html)
+        self.assertIn("costLabel(usage.cost)", html)
+        self.assertIn("costLabel", html)
+        self.assertIn("套餐内", html)
 
     def test_dashboard_html_compacts_large_kpi_numbers(self):
         with TemporaryDirectory() as temp_dir:
@@ -128,6 +149,22 @@ class StatsServerTests(unittest.TestCase):
         self.assertIn("compactNumber", html)
         self.assertIn("setMetric", html)
         self.assertIn("100000000", html)
+
+    def test_dashboard_html_renders_trend_chart(self):
+        with TemporaryDirectory() as temp_dir:
+            store = StatsStore(f"{temp_dir}/stats.db")
+
+            status, _headers, body = handle_stats_request(
+                "GET",
+                urlparse("/"),
+                store,
+            )
+
+        html = body.decode("utf-8")
+        self.assertEqual(status, 200)
+        self.assertIn("trendChart", html)
+        self.assertIn("renderTrendChart", html)
+        self.assertIn("/api/trends", html)
 
     def test_build_stats_response_encodes_json(self):
         status, headers, body = build_stats_response(201, {"ok": True})

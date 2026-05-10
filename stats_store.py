@@ -4,6 +4,8 @@ from datetime import datetime, time as datetime_time, timedelta
 from pathlib import Path
 import sqlite3
 
+from pricing import aggregate_cost, estimate_usage_cost
+
 
 @dataclass(frozen=True)
 class ProxyRequestEvent:
@@ -56,6 +58,92 @@ class StatsStore:
         proxy = self._get_proxy_summary(since)
         usage = self._get_usage_summary(since)
         return {"proxy": proxy, "usage": usage}
+
+    def get_trends(self, range_name, now=None, since=None):
+        since = since or self._since_for_range(range_name, now)
+        interval = "hour" if range_name == "day" else "day"
+        buckets = {}
+
+        with self._connection() as conn:
+            proxy_rows = conn.execute(
+                self._range_query(
+                    """
+                    SELECT started_at, success, latency_ms
+                    FROM proxy_requests
+                    """,
+                    "started_at",
+                    since,
+                ),
+                [since] if since else [],
+            ).fetchall()
+            usage_rows = conn.execute(
+                self._range_query(
+                    """
+                    SELECT
+                        timestamp,
+                        model,
+                        input_tokens,
+                        output_tokens,
+                        cache_read_input_tokens,
+                        cache_creation_input_tokens
+                    FROM usage_events
+                    """,
+                    "timestamp",
+                    since,
+                ),
+                [since] if since else [],
+            ).fetchall()
+
+        for row in proxy_rows:
+            bucket = self._bucket_key(row["started_at"], interval)
+            item = self._trend_bucket(buckets, bucket)
+            item["proxy_requests"] += 1
+            item["failed_requests"] += 0 if row["success"] else 1
+            item["_latency_sum"] += int(row["latency_ms"])
+
+        for row in usage_rows:
+            bucket = self._bucket_key(row["timestamp"], interval)
+            item = self._trend_bucket(buckets, bucket)
+            usage = {
+                "input_tokens": int(row["input_tokens"]),
+                "output_tokens": int(row["output_tokens"]),
+                "cache_read_input_tokens": int(
+                    row["cache_read_input_tokens"]
+                ),
+                "cache_creation_input_tokens": int(
+                    row["cache_creation_input_tokens"]
+                ),
+            }
+            cost = estimate_usage_cost(row["model"], usage)
+            item["input_tokens"] += usage["input_tokens"]
+            item["output_tokens"] += usage["output_tokens"]
+            item["total_tokens"] += (
+                usage["input_tokens"] + usage["output_tokens"]
+            )
+            item["cache_read_input_tokens"] += usage[
+                "cache_read_input_tokens"
+            ]
+            item["cache_creation_input_tokens"] += usage[
+                "cache_creation_input_tokens"
+            ]
+            item["estimated_cost"] += cost["total"]
+
+        result = []
+        for bucket in sorted(buckets):
+            item = buckets[bucket]
+            if item["proxy_requests"]:
+                item["average_latency_ms"] = int(
+                    item["_latency_sum"] / item["proxy_requests"]
+                )
+            del item["_latency_sum"]
+            result.append(item)
+
+        return {
+            "range": range_name,
+            "interval": interval,
+            "currency": "CNY",
+            "points": result,
+        }
 
     def upsert_usage_event(self, event):
         with self._connection() as conn:
@@ -202,7 +290,7 @@ class StatsStore:
         for model_row in model_rows:
             model_input = int(model_row["input_tokens"])
             model_output = int(model_row["output_tokens"])
-            models[model_row["model"]] = {
+            model_usage = {
                 "input_tokens": model_input,
                 "output_tokens": model_output,
                 "total_tokens": model_input + model_output,
@@ -215,6 +303,15 @@ class StatsStore:
                 "web_search_requests": int(model_row["web_search_requests"]),
                 "web_fetch_requests": int(model_row["web_fetch_requests"]),
             }
+            model_usage["cost"] = estimate_usage_cost(
+                model_row["model"],
+                model_usage,
+            )
+            models[model_row["model"]] = model_usage
+
+        cost = aggregate_cost({
+            model: usage["cost"] for model, usage in models.items()
+        })
 
         return {
             "input_tokens": input_tokens,
@@ -226,6 +323,7 @@ class StatsStore:
             ),
             "web_search_requests": int(row["web_search_requests"]),
             "web_fetch_requests": int(row["web_fetch_requests"]),
+            "cost": cost,
             "models": models,
         }
 
@@ -316,6 +414,40 @@ class StatsStore:
         else:
             return None
         return start.isoformat()
+
+    def _range_query(self, select_sql, time_column, since):
+        if since:
+            return f"{select_sql} WHERE {time_column} >= ?"
+        return select_sql
+
+    def _bucket_key(self, value, interval):
+        dt = parse_datetime(value)
+        if interval == "hour":
+            dt = dt.replace(minute=0, second=0, microsecond=0)
+        else:
+            dt = datetime.combine(
+                dt.date(),
+                datetime_time.min,
+                tzinfo=dt.tzinfo,
+            )
+        return dt.isoformat()
+
+    def _trend_bucket(self, buckets, bucket):
+        if bucket not in buckets:
+            buckets[bucket] = {
+                "bucket": bucket,
+                "proxy_requests": 0,
+                "failed_requests": 0,
+                "average_latency_ms": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "estimated_cost": 0.0,
+                "_latency_sum": 0,
+            }
+        return buckets[bucket]
 
 
 def parse_datetime(value):

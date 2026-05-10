@@ -32,6 +32,11 @@ def handle_stats_request(method, parsed_url, stats_store):
         range_name = (params.get("range") or ["day"])[0]
         return build_stats_response(200, stats_store.get_summary(range_name))
 
+    if method == "GET" and parsed_url.path == "/api/trends":
+        params = parse_qs(parsed_url.query)
+        range_name = (params.get("range") or ["day"])[0]
+        return build_stats_response(200, stats_store.get_trends(range_name))
+
     if method == "POST" and parsed_url.path == "/api/clear-proxy-stats":
         stats_store.clear_proxy_stats()
         return build_stats_response(200, {"ok": True})
@@ -138,7 +143,7 @@ DASHBOARD_HTML = """<!doctype html>
     }
     .grid {
       display: grid;
-      grid-template-columns: repeat(4, minmax(180px, 1fr));
+      grid-template-columns: repeat(5, minmax(170px, 1fr));
       gap: 18px;
     }
     .card {
@@ -176,6 +181,51 @@ DASHBOARD_HTML = """<!doctype html>
       grid-template-columns: 1fr 1fr;
       gap: 18px;
       margin-top: 18px;
+    }
+    .trend-panel {
+      margin-top: 18px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: var(--panel);
+      padding: 18px;
+    }
+    .trend-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .trend-head h2 {
+      margin: 0;
+      font-size: 16px;
+    }
+    .legend {
+      display: flex;
+      gap: 14px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 800;
+    }
+    .legend span::before {
+      content: "";
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      margin-right: 6px;
+      background: var(--dot);
+    }
+    .chart {
+      width: 100%;
+      height: 220px;
+      display: block;
+      border-top: 1px solid #edf1f7;
+    }
+    .empty-chart {
+      color: var(--muted);
+      font-weight: 700;
+      padding: 42px 0;
     }
     .table {
       border: 1px solid var(--line);
@@ -246,6 +296,7 @@ DASHBOARD_HTML = """<!doctype html>
       header { align-items: flex-start; flex-direction: column; }
       .grid, .details { grid-template-columns: 1fr; }
       .model-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .trend-head { align-items: flex-start; flex-direction: column; }
       .controls { width: 100%; justify-content: space-between; }
     }
   </style>
@@ -291,6 +342,22 @@ DASHBOARD_HTML = """<!doctype html>
         <div class="value" id="avgLatency">0ms</div>
         <div class="sub" id="successRate">成功率 0%</div>
       </article>
+      <article class="card" style="--accent: var(--red)">
+        <div class="label">预估费用</div>
+        <div class="value" id="estimatedCost">¥0</div>
+        <div class="sub" id="costSub">API 0 / 套餐 0</div>
+      </article>
+    </section>
+
+    <section class="trend-panel">
+      <div class="trend-head">
+        <h2>趋势图</h2>
+        <div class="legend">
+          <span style="--dot: var(--green)">Token</span>
+          <span style="--dot: var(--red)">费用</span>
+        </div>
+      </div>
+      <div id="trendChart" class="empty-chart">暂无趋势数据</div>
     </section>
 
     <section class="details">
@@ -309,6 +376,7 @@ DASHBOARD_HTML = """<!doctype html>
     let currentRange = 'day';
     const fmt = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 });
     const unitFmt = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 });
+    const moneyFmt = new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 4 });
     const text = (id, value) => { document.getElementById(id).textContent = value; };
     const setMetric = (id, value, title) => {
       const element = document.getElementById(id);
@@ -326,6 +394,7 @@ DASHBOARD_HTML = """<!doctype html>
       }
       return fmt.format(value);
     };
+    const money = value => `¥${moneyFmt.format(value)}`;
     const escapeHtml = value => String(value)
       .replaceAll('&', '&amp;')
       .replaceAll('<', '&lt;')
@@ -335,6 +404,11 @@ DASHBOARD_HTML = """<!doctype html>
     const rows = entries => entries.length
       ? entries.map(([k, v]) => `<div class="row"><span>${escapeHtml(k)}</span><strong>${fmt.format(v)}</strong></div>`).join('')
       : '<div class="row"><span>暂无数据</span><strong>0</strong></div>';
+    const costLabel = cost => {
+      if (cost.billing_type === 'token_plan') return '套餐内';
+      if (cost.billing_type === 'unknown') return '未计价';
+      return money(cost.total);
+    };
     const modelRows = models => {
       const entries = Object.entries(models)
         .sort((a, b) => b[1].total_tokens - a[1].total_tokens);
@@ -344,7 +418,7 @@ DASHBOARD_HTML = """<!doctype html>
       return entries.map(([model, usage]) => `
         <div class="model-row">
           <span class="model-name">${escapeHtml(model)}</span>
-          <strong class="model-total">${fmt.format(usage.total_tokens)}</strong>
+          <strong class="model-total">${fmt.format(usage.total_tokens)} · ${costLabel(usage.cost)}</strong>
           <div class="model-metrics">
             <span class="metric">输入 <strong>${fmt.format(usage.input_tokens)}</strong></span>
             <span class="metric">输出 <strong>${fmt.format(usage.output_tokens)}</strong></span>
@@ -354,10 +428,52 @@ DASHBOARD_HTML = """<!doctype html>
         </div>
       `).join('');
     };
+    const linePath = (points, key, width, height, pad, maxValue) => {
+      if (points.length < 2 || maxValue <= 0) return '';
+      return points.map((point, index) => {
+        const x = pad + (index * (width - pad * 2)) / (points.length - 1);
+        const y = height - pad - ((point[key] || 0) / maxValue) * (height - pad * 2);
+        return `${index ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)}`;
+      }).join(' ');
+    };
+    const renderTrendChart = points => {
+      const chart = document.getElementById('trendChart');
+      if (!points.length) {
+        chart.className = 'empty-chart';
+        chart.innerHTML = '暂无趋势数据';
+        return;
+      }
+      chart.className = 'chart';
+      const width = 960;
+      const height = 220;
+      const pad = 28;
+      const maxTokens = Math.max(...points.map(point => point.total_tokens || 0), 1);
+      const maxCost = Math.max(...points.map(point => point.estimated_cost || 0), 1);
+      const tokenPath = linePath(points, 'total_tokens', width, height, pad, maxTokens);
+      const costPath = linePath(points, 'estimated_cost', width, height, pad, maxCost);
+      const first = new Date(points[0].bucket).toLocaleDateString();
+      const last = new Date(points[points.length - 1].bucket).toLocaleDateString();
+      chart.innerHTML = `
+        <svg viewBox="0 0 ${width} ${height}" width="100%" height="220" role="img" aria-label="token and cost trends">
+          <line x1="${pad}" y1="${height - pad}" x2="${width - pad}" y2="${height - pad}" stroke="#d7e0ef"/>
+          <line x1="${pad}" y1="${pad}" x2="${pad}" y2="${height - pad}" stroke="#d7e0ef"/>
+          <path d="${tokenPath}" fill="none" stroke="#137f6d" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="${costPath}" fill="none" stroke="#d92d3a" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+          <text x="${pad}" y="${height - 6}" fill="#66738a" font-size="13" font-weight="700">${escapeHtml(first)}</text>
+          <text x="${width - pad}" y="${height - 6}" text-anchor="end" fill="#66738a" font-size="13" font-weight="700">${escapeHtml(last)}</text>
+          <text x="${pad}" y="18" fill="#137f6d" font-size="13" font-weight="800">Token ${compactNumber(maxTokens)}</text>
+          <text x="${width - pad}" y="18" text-anchor="end" fill="#d92d3a" font-size="13" font-weight="800">费用 ${money(maxCost)}</text>
+        </svg>
+      `;
+    };
 
     async function refresh() {
-      const res = await fetch(`/api/summary?range=${currentRange}`, { cache: 'no-store' });
+      const [res, trendRes] = await Promise.all([
+        fetch(`/api/summary?range=${currentRange}`, { cache: 'no-store' }),
+        fetch(`/api/trends?range=${currentRange}`, { cache: 'no-store' }),
+      ]);
       const data = await res.json();
+      const trendData = await trendRes.json();
       const p = data.proxy;
       const u = data.usage;
       setMetric('totalRequests', fmt.format(p.total_requests));
@@ -372,8 +488,11 @@ DASHBOARD_HTML = """<!doctype html>
       text('cacheSub', `读 ${compactNumber(u.cache_read_input_tokens)} / 写 ${compactNumber(u.cache_creation_input_tokens)}`);
       setMetric('avgLatency', `${fmt.format(p.average_latency_ms)}ms`);
       text('successRate', `成功率 ${percent(p.success_rate)}`);
+      setMetric('estimatedCost', money(u.cost.total), `${money(u.cost.total)} CNY`);
+      text('costSub', `API ${u.cost.billable_models} / 套餐 ${u.cost.token_plan_models} / 未计价 ${u.cost.unknown_models}`);
       document.getElementById('routes').innerHTML = rows(Object.entries(p.routes));
       document.getElementById('models').innerHTML = modelRows(u.models);
+      renderTrendChart(trendData.points);
       text('status', `最后刷新 ${new Date().toLocaleTimeString()}`);
     }
 

@@ -24,6 +24,7 @@ Status legend:
 | 10 | Done | End-to-end verification | Full workflow from `C:\Users\juzi> .\claude.ps1` to proxy + dashboard + Claude Code | Verified new smart-proxy process listens on `8889` and `8890`; dashboard HTML and `/api/summary` return HTTP 200 |
 | 11 | Done | Launcher hardening after live debug | Launcher writes sidecar stdout/stderr to `logs/` and waits for dashboard HTTP 200 instead of only checking the port | `claude.ps1`, `claude-with-proxy.ps1`, and `setup.ps1` parse successfully; `/api/summary` returns HTTP 200 |
 | 12 | Done | Model leaderboard enhancement | Model split rows show total tokens plus input, output, cache read, and cache write breakdowns sorted by total tokens | Dashboard HTML contains model detail renderer; stats server tests and full suite pass; live dashboard serves updated HTML |
+| 13 | Done | Cost estimate and trend chart | DeepSeek API usage is priced from official per-million-token rates; token-plan models are excluded from cash API spend; `/api/trends` powers token/cost chart | Pricing, summary, trends, API, and dashboard tests pass; full suite passes |
 
 ## Current Decision Log
 
@@ -37,6 +38,7 @@ Status legend:
 | Clear button default | Clear smart-proxy request stats only |
 | Headline token total | `input_tokens + output_tokens` |
 | Cache tokens | Display separately as cache read and cache write |
+| API cost estimate | DeepSeek API models are billable; MiniMax/MiMo token-plan models are non-billable in this dashboard |
 
 ## Update Rule
 

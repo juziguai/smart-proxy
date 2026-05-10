@@ -196,6 +196,17 @@ class StatsStoreTests(unittest.TestCase):
                     "cache_creation_input_tokens": 10,
                     "web_search_requests": 1,
                     "web_fetch_requests": 2,
+                    "cost": {
+                        "billable": False,
+                        "billing_type": "unknown",
+                        "currency": "CNY",
+                        "total": 0.0,
+                        "input": 0.0,
+                        "output": 0.0,
+                        "cache_read": 0.0,
+                        "cache_write": 0.0,
+                        "source": "",
+                    },
                 }
             },
         )
@@ -230,6 +241,118 @@ class StatsStoreTests(unittest.TestCase):
         summary = store.get_summary("all")
         self.assertEqual(summary["usage"]["input_tokens"], 100)
         self.assertEqual(summary["usage"]["output_tokens"], 20)
+
+    def test_summary_estimates_api_cost_and_marks_token_plan_models(self):
+        tmp_path = self.enterContext(TemporaryDirectoryPath())
+        store = StatsStore(tmp_path / "stats.db")
+
+        store.upsert_usage_event(
+            UsageEvent(
+                source_file="deepseek.jsonl",
+                source_line=1,
+                timestamp="2026-05-10T01:00:00+00:00",
+                session_id="session-a",
+                model="deepseek-v4-flash",
+                input_tokens=1_000_000,
+                output_tokens=2_000_000,
+                cache_read_input_tokens=3_000_000,
+                cache_creation_input_tokens=4_000_000,
+                web_search_requests=0,
+                web_fetch_requests=0,
+                service_tier="standard",
+                speed="fast",
+            )
+        )
+        store.upsert_usage_event(
+            UsageEvent(
+                source_file="minimax.jsonl",
+                source_line=1,
+                timestamp="2026-05-10T01:00:00+00:00",
+                session_id="session-b",
+                model="MiniMax-M2.7-highspeed",
+                input_tokens=1_000_000,
+                output_tokens=1_000_000,
+                cache_read_input_tokens=1_000_000,
+                cache_creation_input_tokens=1_000_000,
+                web_search_requests=0,
+                web_fetch_requests=0,
+                service_tier="standard",
+                speed="fast",
+            )
+        )
+
+        summary = store.get_summary("all")
+
+        self.assertAlmostEqual(summary["usage"]["cost"]["total"], 9.06)
+        self.assertEqual(summary["usage"]["cost"]["billable_models"], 1)
+        self.assertEqual(summary["usage"]["cost"]["token_plan_models"], 1)
+        self.assertEqual(
+            summary["usage"]["models"]["MiniMax-M2.7-highspeed"]["cost"][
+                "billing_type"
+            ],
+            "token_plan",
+        )
+
+    def test_trends_groups_usage_cost_and_proxy_metrics(self):
+        tmp_path = self.enterContext(TemporaryDirectoryPath())
+        store = StatsStore(tmp_path / "stats.db")
+
+        store.record_proxy_request(
+            ProxyRequestEvent(
+                started_at="2026-05-10T01:10:00+00:00",
+                completed_at="2026-05-10T01:10:01+00:00",
+                method="CONNECT",
+                host="api.deepseek.com",
+                route="proxy",
+                success=True,
+                latency_ms=100,
+                error=None,
+            )
+        )
+        store.record_proxy_request(
+            ProxyRequestEvent(
+                started_at="2026-05-10T01:20:00+00:00",
+                completed_at="2026-05-10T01:20:01+00:00",
+                method="CONNECT",
+                host="api.deepseek.com",
+                route="proxy",
+                success=False,
+                latency_ms=300,
+                error="failed",
+            )
+        )
+        store.upsert_usage_event(
+            UsageEvent(
+                source_file="deepseek.jsonl",
+                source_line=1,
+                timestamp="2026-05-10T01:30:00+00:00",
+                session_id="session-a",
+                model="deepseek-v4-flash",
+                input_tokens=1_000_000,
+                output_tokens=0,
+                cache_read_input_tokens=0,
+                cache_creation_input_tokens=0,
+                web_search_requests=0,
+                web_fetch_requests=0,
+                service_tier="standard",
+                speed="fast",
+            )
+        )
+
+        trends = store.get_trends(
+            "day",
+            now="2026-05-10T12:00:00+00:00",
+        )
+
+        self.assertEqual(trends["interval"], "hour")
+        self.assertEqual(len(trends["points"]), 1)
+        point = trends["points"][0]
+        self.assertEqual(point["bucket"], "2026-05-10T01:00:00+00:00")
+        self.assertEqual(point["proxy_requests"], 2)
+        self.assertEqual(point["failed_requests"], 1)
+        self.assertEqual(point["average_latency_ms"], 200)
+        self.assertEqual(point["total_tokens"], 1_000_000)
+        self.assertAlmostEqual(point["estimated_cost"], 1.0)
 
 
 class TemporaryDirectoryPath:

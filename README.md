@@ -162,7 +162,8 @@ start "" "<项目路径>\start-proxy.vbs"
 │  Dashboard: http://127.0.0.1:8890                                      │
 │       ├─ 总请求数 / 成功率 / 平均延迟 / 路由拆分                       │
 │       ├─ 总 token / 输入 / 输出 / cache read / cache write             │
-│       └─ 模型榜单：按模型展示 total、input、output、cache read/write   │
+│       ├─ 模型榜单：按模型展示 total、input、output、cache read/write   │
+│       └─ 预估费用与 token/费用趋势图                                    │
 │                                                                       │
 │  说明：smart-proxy 不解密 HTTPS，不读取 API key；token 来自 Claude Code │
 │  已写入本地 transcript 的 usage 字段。                                  │
@@ -223,6 +224,8 @@ smart-proxy 会在同一个 Python 进程里同时启动两个本地服务：
 - 直连、白名单直连、上游代理的路由拆分
 - 输入 token、输出 token、cache read、cache write
 - 模型拆分榜单：按模型展示总 token、输入、输出、cache read、cache write
+- API 预估费用：DeepSeek API 模型按官方价格估算，套餐模型标记为套餐内
+- 趋势图：展示当前范围内 token 与预估费用走势
 - 日 / 周 / 月 / 全部范围切换
 - 清除 smart-proxy 请求统计按钮
 
@@ -241,6 +244,22 @@ token 数据来自 Claude Code 本地 transcript：
 smart-proxy 不解密 HTTPS，也不会读取 API key。token 用量来自 Claude Code 已经写入本地 JSONL 的 `message.usage` 字段。清除按钮默认只清除 smart-proxy 自己记录的请求统计，不删除 Claude Code transcript。
 
 启动脚本会把 sidecar 日志写入 `logs/smart-proxy.out.log` 和 `logs/smart-proxy.err.log`，并等待 dashboard API 返回 HTTP 200 后再继续启动 Claude Code，避免只看到端口监听但页面实际不可用。
+
+### 费用估算
+
+费用统计是本地预估值，不等同于服务商最终账单：
+
+- `deepseek-v4-flash`、`deepseek-v4-pro`：按 DeepSeek 官方“模型 & 价格”页面的百万 tokens 单价估算。
+- `MiniMax-*`、`mimo-*`：按 token plan 套餐处理，不计入 API 现金费用。
+- 其他未知模型：保留 token 统计，但费用标记为未计价。
+
+当前 DeepSeek 价格来源：
+
+```text
+https://api-docs.deepseek.com/zh-cn/quick_start/pricing/
+```
+
+DeepSeek Pro 页面价格包含截至 `2026-05-31 23:59` 的优惠价；如果官方价格调整，更新 `pricing.py` 即可。
 
 ## 配置
 
