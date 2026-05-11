@@ -95,7 +95,8 @@ class StatsStore:
         since = since or self._since_for_range(range_name, now)
         proxy = self._get_proxy_summary(since)
         usage = self._get_usage_summary(since)
-        return {"proxy": proxy, "usage": usage}
+        comparison = self._get_summary_comparison(range_name, now, since)
+        return {"proxy": proxy, "usage": usage, "comparison": comparison}
 
     def get_recent_proxy_requests(self, limit=50, since=None):
         limit = max(1, min(int(limit), 200))
@@ -148,6 +149,52 @@ class StatsStore:
                     and int(row["connect_latency_ms"]) >= SLOW_REQUEST_THRESHOLD_MS
                 ),
                 "error": row["error"],
+            }
+            for row in rows
+        ]
+
+    def get_whitelist_candidates(self, limit=10, since=None):
+        limit = max(1, min(int(limit), 50))
+        where, params = self._time_window_clause("started_at", since)
+        connect_latency_expr = self._connect_latency_expr()
+
+        with self._connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT
+                    host,
+                    COUNT(*) AS total_requests,
+                    COALESCE(SUM(CASE WHEN route = 'proxy' THEN 1 ELSE 0 END), 0)
+                        AS proxy_requests,
+                    COALESCE(SUM(CASE WHEN route = 'direct_whitelist' THEN 1 ELSE 0 END), 0)
+                        AS whitelist_requests,
+                    COALESCE(SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END), 0)
+                        AS failed_requests,
+                    COALESCE(SUM(CASE WHEN {connect_latency_expr} >= ? THEN 1 ELSE 0 END), 0)
+                        AS slow_requests,
+                    COALESCE(AVG({connect_latency_expr}), 0)
+                        AS average_connect_latency_ms
+                FROM proxy_requests
+                {where}
+                GROUP BY host
+                HAVING proxy_requests > 0
+                ORDER BY proxy_requests DESC, slow_requests DESC, average_connect_latency_ms DESC
+                LIMIT ?
+                """,
+                [SLOW_REQUEST_THRESHOLD_MS] + params + [limit],
+            ).fetchall()
+
+        return [
+            {
+                "host": row["host"],
+                "total_requests": int(row["total_requests"]),
+                "proxy_requests": int(row["proxy_requests"]),
+                "whitelist_requests": int(row["whitelist_requests"]),
+                "failed_requests": int(row["failed_requests"]),
+                "slow_requests": int(row["slow_requests"]),
+                "average_connect_latency_ms": int(
+                    row["average_connect_latency_ms"]
+                ),
             }
             for row in rows
         ]
@@ -271,12 +318,8 @@ class StatsStore:
                     ),
                 )
 
-    def _get_proxy_summary(self, since):
-        where = ""
-        params = []
-        if since:
-            where = "WHERE datetime(started_at) >= datetime(?)"
-            params.append(since)
+    def _get_proxy_summary(self, since, until=None):
+        where, params = self._time_window_clause("started_at", since, until)
         connect_latency_expr = self._connect_latency_expr()
         duration_expr = "COALESCE(duration_ms, latency_ms)"
 
@@ -424,11 +467,13 @@ class StatsStore:
             reverse=True,
         )
         alerts = self._build_proxy_alerts(host_breakdown)
+        slow_requests = sum(item["slow_requests"] for item in host_breakdown)
 
         return {
             "total_requests": total_requests,
             "successful_requests": successful_requests,
             "failed_requests": failed_requests,
+            "slow_requests": slow_requests,
             "success_rate": success_rate,
             "average_latency_ms": average_latency_ms,
             "average_connect_latency_ms": average_connect_latency_ms,
@@ -514,12 +559,8 @@ class StatsStore:
             return "content_site"
         return "generic"
 
-    def _get_usage_summary(self, since):
-        where = ""
-        params = []
-        if since:
-            where = "WHERE datetime(timestamp) >= datetime(?)"
-            params.append(since)
+    def _get_usage_summary(self, since, until=None):
+        where, params = self._time_window_clause("timestamp", since, until)
 
         with self._connection() as conn:
             row = conn.execute(
@@ -604,6 +645,93 @@ class StatsStore:
             "cost": cost,
             "models": models,
         }
+
+    def _get_summary_comparison(self, range_name, now, since):
+        previous_window = self._previous_window_for_range(range_name, now, since)
+        if previous_window is None:
+            return {
+                "label": "全量统计",
+                "available": False,
+                "previous": None,
+            }
+
+        previous_since, previous_until, label = previous_window
+        previous_proxy = self._get_proxy_summary(previous_since, previous_until)
+        previous_usage = self._get_usage_summary(previous_since, previous_until)
+        return {
+            "label": label,
+            "available": True,
+            "previous": {
+                "proxy": self._comparison_proxy(previous_proxy),
+                "usage": self._comparison_usage(previous_usage),
+            },
+        }
+
+    def _comparison_proxy(self, proxy):
+        return {
+            "total_requests": proxy["total_requests"],
+            "successful_requests": proxy["successful_requests"],
+            "failed_requests": proxy["failed_requests"],
+            "slow_requests": proxy["slow_requests"],
+            "success_rate": proxy["success_rate"],
+            "average_latency_ms": proxy["average_latency_ms"],
+            "average_connect_latency_ms": proxy["average_connect_latency_ms"],
+            "average_duration_ms": proxy["average_duration_ms"],
+        }
+
+    def _comparison_usage(self, usage):
+        return {
+            "input_tokens": usage["input_tokens"],
+            "output_tokens": usage["output_tokens"],
+            "total_tokens": usage["total_tokens"],
+            "cache_read_input_tokens": usage["cache_read_input_tokens"],
+            "cache_creation_input_tokens": usage["cache_creation_input_tokens"],
+            "cost": {
+                "currency": usage["cost"]["currency"],
+                "total": usage["cost"]["total"],
+            },
+        }
+
+    def _previous_window_for_range(self, range_name, now, since):
+        if range_name == "all" or not since:
+            return None
+
+        current_start = parse_datetime(since)
+        current = parse_datetime(now) if now else datetime.now().astimezone()
+        if current.tzinfo is None and current_start.tzinfo is not None:
+            current = current.replace(tzinfo=current_start.tzinfo)
+
+        if range_name == "day":
+            return (
+                (current_start - timedelta(days=1)).isoformat(),
+                current_start.isoformat(),
+                "较昨日",
+            )
+        if range_name == "week":
+            return (
+                (current_start - timedelta(days=7)).isoformat(),
+                current_start.isoformat(),
+                "较前7天",
+            )
+        if range_name == "month":
+            return (
+                (current_start - timedelta(days=30)).isoformat(),
+                current_start.isoformat(),
+                "较前30天",
+            )
+        return None
+
+    def _time_window_clause(self, column, since, until=None):
+        clauses = []
+        params = []
+        if since:
+            clauses.append(f"datetime({column}) >= datetime(?)")
+            params.append(since)
+        if until:
+            clauses.append(f"datetime({column}) < datetime(?)")
+            params.append(until)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        return where, params
 
     def clear_proxy_stats(self):
         with self._connection() as conn:

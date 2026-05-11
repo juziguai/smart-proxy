@@ -23,7 +23,15 @@ def build_html_response(status, html):
     )
 
 
-def handle_stats_request(method, parsed_url, stats_store, status_provider=None):
+def handle_stats_request(
+    method,
+    parsed_url,
+    stats_store,
+    status_provider=None,
+    whitelist_provider=None,
+    doctor_provider=None,
+    request_body=b"",
+):
     if method == "GET" and parsed_url.path in ("", "/"):
         return build_html_response(200, DASHBOARD_HTML)
 
@@ -65,6 +73,37 @@ def handle_stats_request(method, parsed_url, stats_store, status_provider=None):
         else:
             status = status_provider()
         return build_stats_response(200, status)
+
+    if method == "GET" and parsed_url.path == "/api/whitelist":
+        if whitelist_provider is None:
+            return build_stats_response(
+                200,
+                {
+                    "entries": [],
+                    "path": "",
+                    "count": 0,
+                    "loaded_at": "",
+                    "candidates": [],
+                },
+            )
+        return build_stats_response(200, whitelist_provider.get())
+
+    if method == "POST" and parsed_url.path == "/api/whitelist":
+        if whitelist_provider is None:
+            return build_stats_response(503, {"error": "whitelist unavailable"})
+        try:
+            payload = json.loads(request_body.decode("utf-8") or "{}")
+        except json.JSONDecodeError:
+            return build_stats_response(400, {"error": "invalid json"})
+        try:
+            return build_stats_response(200, whitelist_provider.save(payload))
+        except ValueError as exc:
+            return build_stats_response(400, {"error": str(exc)})
+
+    if method == "GET" and parsed_url.path == "/api/doctor":
+        if doctor_provider is None:
+            return build_stats_response(200, {"checks": []})
+        return build_stats_response(200, doctor_provider())
 
     if method == "POST" and parsed_url.path == "/api/clear-proxy-stats":
         stats_store.clear_proxy_stats()
@@ -630,6 +669,142 @@ DASHBOARD_HTML = """<!doctype html>
       font-weight: 750;
       padding-top: 10px;
     }
+    .panel-intro {
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 750;
+      margin: 6px 0 16px;
+    }
+    .feedback {
+      border-radius: 7px;
+      display: none;
+      font-size: 13px;
+      font-weight: 850;
+      margin: 10px 0;
+      padding: 10px 12px;
+    }
+    .feedback.show {
+      display: block;
+    }
+    .feedback.ok {
+      background: #def7ed;
+      color: var(--green);
+    }
+    .feedback.error {
+      background: #ffe4e8;
+      color: var(--red);
+    }
+    .feedback.info {
+      background: #eaf1ff;
+      color: var(--blue);
+    }
+    .toolbar-row {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin: 12px 0;
+    }
+    .text-input {
+      border: 1px solid #dfe5ee;
+      border-radius: 7px;
+      color: #253047;
+      flex: 1;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 750;
+      min-width: 220px;
+      padding: 10px 12px;
+    }
+    .primary-action {
+      border: 0;
+      border-radius: 7px;
+      background: var(--blue);
+      color: white;
+      cursor: pointer;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 900;
+      padding: 10px 14px;
+    }
+    .secondary-action {
+      border: 1px solid #dfe5ee;
+      border-radius: 7px;
+      background: white;
+      color: #344154;
+      cursor: pointer;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 900;
+      padding: 9px 13px;
+    }
+    .secondary-action:disabled,
+    .primary-action:disabled {
+      cursor: default;
+      opacity: 0.62;
+    }
+    .split-panels {
+      display: grid;
+      grid-template-columns: minmax(320px, 0.9fr) minmax(420px, 1.1fr);
+      gap: 16px;
+    }
+    .entry-list,
+    .doctor-list {
+      display: grid;
+      gap: 10px;
+      margin-top: 10px;
+    }
+    .entry-item,
+    .candidate-item,
+    .doctor-item {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 12px;
+      align-items: center;
+      border-top: 1px solid #edf1f7;
+      padding: 12px 0 2px;
+    }
+    .entry-item strong,
+    .candidate-item strong,
+    .doctor-item strong {
+      color: #07172f;
+      display: block;
+      font-size: 14px;
+      font-weight: 950;
+    }
+    .entry-item span,
+    .candidate-item span,
+    .doctor-item span {
+      color: var(--muted);
+      display: block;
+      font-size: 12px;
+      font-weight: 760;
+      line-height: 1.45;
+      margin-top: 3px;
+    }
+    .mini-danger {
+      border: 0;
+      border-radius: 999px;
+      background: #ffe4e8;
+      color: var(--red);
+      cursor: pointer;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 950;
+      padding: 6px 10px;
+      white-space: nowrap;
+    }
+    .doctor-status {
+      justify-self: end;
+    }
+    .doctor-status.ok {
+      background: #def7ed;
+      color: var(--green);
+    }
+    .doctor-status.warning {
+      background: #fff0d8;
+      color: var(--orange);
+    }
     .topbar {
       height: 64px;
       margin: 0;
@@ -1134,6 +1309,7 @@ DASHBOARD_HTML = """<!doctype html>
       .controls { width: 100%; justify-content: space-between; }
       .shell-status { justify-content: flex-start; }
       .alerts-panel { grid-template-columns: 1fr; }
+      .split-panels { grid-template-columns: 1fr; }
       .runtime-item, .host-row, .request-row { grid-template-columns: 1fr; }
       .anomaly-card { grid-template-columns: 1fr; }
       .request-time { white-space: normal; }
@@ -1198,7 +1374,7 @@ DASHBOARD_HTML = """<!doctype html>
             <div>
               <div class="label">总请求数</div>
               <div class="value" id="totalRequests">0</div>
-              <div class="sub" id="requestSub">较昨日 0% · 成功 0 / 失败 0</div>
+              <div class="sub" id="requestSub">等待对比 · 成功 0 / 失败 0</div>
             </div>
           </article>
           <article class="card metric-card" style="--accent: var(--green)">
@@ -1206,7 +1382,7 @@ DASHBOARD_HTML = """<!doctype html>
             <div>
               <div class="label">成功率</div>
               <div class="value" id="successRateKpi">0%</div>
-              <div class="sub" id="successRate">较昨日 0% · 持续 0ms</div>
+              <div class="sub" id="successRate">等待对比 · 持续 0ms</div>
             </div>
           </article>
           <article class="card metric-card" style="--accent: var(--orange)">
@@ -1214,7 +1390,7 @@ DASHBOARD_HTML = """<!doctype html>
             <div>
               <div class="label">平均建连(P50)</div>
               <div class="value" id="avgLatency">0ms</div>
-              <div class="sub" id="latencySub">较昨日 0% · 慢建连 0</div>
+              <div class="sub" id="latencySub">等待对比 · 慢建连 0</div>
             </div>
           </article>
           <article class="card metric-card" style="--accent: var(--red)">
@@ -1222,7 +1398,7 @@ DASHBOARD_HTML = """<!doctype html>
             <div>
               <div class="label">今日费用</div>
               <div class="value" id="estimatedCost">¥0</div>
-              <div class="sub" id="costSub">较昨日 0% · API 0 / 套餐 0</div>
+              <div class="sub" id="costSub">等待对比 · API 0 / 套餐 0</div>
             </div>
           </article>
           <article class="card metric-card" style="--accent: var(--violet)">
@@ -1230,7 +1406,7 @@ DASHBOARD_HTML = """<!doctype html>
             <div>
               <div class="label">今日 Token</div>
               <div class="value" id="totalTokens">0</div>
-              <div class="sub" id="tokenSub">较昨日 0% · 输入 0 / 输出 0</div>
+              <div class="sub" id="tokenSub">等待对比 · 输入 0 / 输出 0</div>
             </div>
             <div id="cacheTokens" hidden>0</div>
             <div id="cacheSub" hidden>读 0 / 写 0</div>
@@ -1334,13 +1510,22 @@ DASHBOARD_HTML = """<!doctype html>
     </section>
 
     <section class="tab-panel" data-tab-panel="whitelist">
-      <section class="table">
-        <h2>Whitelist</h2>
-        <p class="panel-note">白名单命中分析和白名单 UI 管理会放在这里。当前版本先预留独立页签，避免继续挤压总览页。</p>
-        <div class="placeholder-list">
-          <span>候选 Host 分析</span>
-          <span>当前 whitelist.txt 条目</span>
-          <span>添加 / 删除 / 保存 / reload</span>
+      <section class="split-panels">
+        <div class="table">
+          <h2>Whitelist</h2>
+          <p class="panel-intro" id="whitelistMeta">正在读取 whitelist.txt...</p>
+          <div class="toolbar-row">
+            <input class="text-input" id="whitelistInput" placeholder="例如 *.github.com 或 api.deepseek.com" aria-label="新增白名单条目">
+            <button class="primary-action" id="addWhitelistEntry">添加</button>
+            <button class="secondary-action" id="saveWhitelist">保存</button>
+          </div>
+          <div class="feedback info" id="whitelistFeedback" role="status" aria-live="polite"></div>
+          <div class="entry-list" id="whitelistEntries"></div>
+        </div>
+        <div class="table">
+          <h2>候选 Host 分析</h2>
+          <p class="panel-intro">这些 Host 经常走代理，可结合延迟和业务重要性决定是否加入白名单直连。</p>
+          <div class="entry-list" id="whitelistCandidates"></div>
         </div>
       </section>
     </section>
@@ -1348,12 +1533,11 @@ DASHBOARD_HTML = """<!doctype html>
     <section class="tab-panel" data-tab-panel="doctor">
       <section class="table">
         <h2>Doctor</h2>
-        <p class="panel-note">启动自检会放在这里：本地端口、Python 路径、Claude transcript、白名单、系统代理和上游代理连通性。</p>
-        <div class="placeholder-list">
-          <span>Proxy 端口与 Dashboard 端口</span>
-          <span>Claude transcript 可读性</span>
-          <span>系统代理与上游代理连通性</span>
+        <p class="panel-intro" id="doctorMeta">正在运行本机自检...</p>
+        <div class="toolbar-row">
+          <button class="primary-action" id="runDoctor">重新自检</button>
         </div>
+        <div class="doctor-list" id="doctorChecks"></div>
       </section>
     </section>
 
@@ -1366,6 +1550,7 @@ DASHBOARD_HTML = """<!doctype html>
     let layoutEditing = false;
     let draggedWidget = null;
     let refreshTimer = null;
+    let whitelistEntriesState = [];
     const layoutStorageKey = 'smartProxyOverviewDashboardLayout.v1';
     const defaultLayout = ['alerts', 'kpis', 'trend', 'bottom'];
     const layoutRoot = document.getElementById('layoutRoot');
@@ -1452,6 +1637,32 @@ DASHBOARD_HTML = """<!doctype html>
       return '';
     };
     const percent = value => `${Math.round(value * 100)}%`;
+    const changeText = (label, current, previous) => {
+      if (previous === undefined || previous === null) return label;
+      if (previous === 0) return current === 0 ? `${label} 持平` : `${label} 新增`;
+      const change = Math.round(((current - previous) / Math.abs(previous)) * 100);
+      if (change === 0) return `${label} 持平`;
+      return `${label} ${change > 0 ? '+' : ''}${change}%`;
+    };
+    const comparisonText = (comparison, current, previous) => {
+      const label = comparison?.label || '较昨日';
+      if (!comparison?.available) return label;
+      return changeText(label, current || 0, previous || 0);
+    };
+    const deltaComparisonText = (comparison, current, previous, unit = '') => {
+      const label = comparison?.label || '较昨日';
+      if (!comparison?.available || previous === undefined || previous === null) return label;
+      const delta = Math.round((current || 0) - (previous || 0));
+      if (delta === 0) return `${label} 持平`;
+      return `${label} ${delta > 0 ? '+' : ''}${fmt.format(delta)}${unit}`;
+    };
+    const pointComparisonText = (comparison, current, previous) => {
+      const label = comparison?.label || '较昨日';
+      if (!comparison?.available || previous === undefined || previous === null) return label;
+      const delta = Math.round(((current || 0) - (previous || 0)) * 100);
+      if (delta === 0) return `${label} 持平`;
+      return `${label} ${delta > 0 ? '+' : ''}${fmt.format(delta)}个百分点`;
+    };
     const compactNumber = value => {
       const abs = Math.abs(value);
       if (abs >= 100000000) {
@@ -1912,6 +2123,157 @@ DASHBOARD_HTML = """<!doctype html>
       upstreamChip.classList.toggle('good', status.proxy_enabled === true);
       upstreamChip.classList.toggle('warning', status.proxy_enabled === false);
     };
+    const showWhitelistFeedback = (message, type = 'info') => {
+      const feedback = document.getElementById('whitelistFeedback');
+      feedback.textContent = message;
+      feedback.className = `feedback show ${type}`;
+    };
+    const renderWhitelistEntries = () => {
+      const container = document.getElementById('whitelistEntries');
+      if (!whitelistEntriesState.length) {
+        container.innerHTML = '<div class="table-empty">白名单为空，保存后会自动创建 whitelist.txt</div>';
+        return;
+      }
+      container.innerHTML = whitelistEntriesState.map(entry => `
+        <div class="entry-item">
+          <div>
+            <strong>${escapeHtml(entry)}</strong>
+            <span>${entry.includes('*') ? '通配规则' : '精确 Host'}</span>
+          </div>
+          <button class="mini-danger" data-remove-whitelist="${escapeHtml(entry)}">删除</button>
+        </div>
+      `).join('');
+      container.querySelectorAll('[data-remove-whitelist]').forEach(button => {
+        button.addEventListener('click', () => {
+          whitelistEntriesState = whitelistEntriesState.filter(entry => entry !== button.dataset.removeWhitelist);
+          renderWhitelistEntries();
+        });
+      });
+    };
+    const wildcardToRegex = pattern => new RegExp(`^${String(pattern)
+      .replace(/[.+?^${}()|[\\]\\\\]/g, '\\\\$&')
+      .replaceAll('*', '.*')}$`, 'i');
+    const whitelistMatchesHost = host => {
+      const value = String(host || '').trim();
+      if (!value) return false;
+      return whitelistEntriesState.some(entry => {
+        const pattern = String(entry || '').trim();
+        if (!pattern) return false;
+        return pattern.includes('*')
+          ? wildcardToRegex(pattern).test(value)
+          : pattern.toLowerCase() === value.toLowerCase();
+      });
+    };
+    const renderWhitelistCandidates = candidates => {
+      const container = document.getElementById('whitelistCandidates');
+      if (!candidates.length) {
+        container.innerHTML = '<div class="table-empty">暂无候选 Host</div>';
+        return;
+      }
+      container.innerHTML = candidates.map(candidate => `
+        <div class="candidate-item">
+          <div>
+            <strong>${escapeHtml(candidate.host || '-')}</strong>
+            <span>代理 ${fmt.format(candidate.proxy_requests || 0)} 次 · 慢建连 ${fmt.format(candidate.slow_requests || 0)} · 平均 ${fmt.format(candidate.average_connect_latency_ms || 0)}ms</span>
+          </div>
+          ${whitelistMatchesHost(candidate.host)
+            ? `<button class="secondary-action" disabled data-add-candidate="${escapeHtml(candidate.host || '')}">已加入</button>`
+            : `<button class="secondary-action" data-add-candidate="${escapeHtml(candidate.host || '')}">加入</button>`}
+        </div>
+      `).join('');
+      container.querySelectorAll('[data-add-candidate]').forEach(button => {
+        button.addEventListener('click', async () => {
+          if (button.disabled) return;
+          await addWhitelistCandidate(button.dataset.addCandidate, button);
+        });
+      });
+    };
+    const refreshWhitelist = async () => {
+      const response = await fetch('/api/whitelist', { cache: 'no-store' });
+      const data = await response.json();
+      whitelistEntriesState = data.entries || [];
+      const loadedAt = data.loaded_at ? new Date(data.loaded_at).toLocaleString() : '尚未加载';
+      text('whitelistMeta', `${data.path || 'whitelist.txt'} · ${fmt.format(data.count || 0)} 条 · ${loadedAt}`);
+      renderWhitelistEntries();
+      renderWhitelistCandidates(data.candidates || []);
+    };
+    const addWhitelistEntry = entry => {
+      const value = String(entry || '').trim();
+      if (!value || whitelistEntriesState.includes(value)) return;
+      whitelistEntriesState = [...whitelistEntriesState, value].sort();
+      document.getElementById('whitelistInput').value = '';
+      renderWhitelistEntries();
+    };
+    const saveWhitelistEntries = async (successMessage = '白名单保存成功') => {
+      const response = await fetch('/api/whitelist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entries: whitelistEntriesState }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        showWhitelistFeedback(`保存失败：${data.error || response.status}`, 'error');
+        throw new Error(data.error || `HTTP ${response.status}`);
+      }
+      whitelistEntriesState = data.entries || [];
+      const loadedAt = data.loaded_at ? new Date(data.loaded_at).toLocaleString() : '刚刚';
+      text('whitelistMeta', `${data.path || 'whitelist.txt'} · ${fmt.format(data.count || 0)} 条 · ${loadedAt}`);
+      showWhitelistFeedback(successMessage, 'ok');
+      renderWhitelistEntries();
+      await refreshWhitelist();
+    };
+    const addWhitelistCandidate = async (entry, button) => {
+      const value = String(entry || '').trim();
+      if (!value) return;
+      if (whitelistEntriesState.includes(value)) {
+        showWhitelistFeedback(`${value} 已在白名单中`, 'info');
+        if (button) button.textContent = '已加入';
+        return;
+      }
+      whitelistEntriesState = [...whitelistEntriesState, value].sort();
+      renderWhitelistEntries();
+      if (button) {
+        button.disabled = true;
+        button.textContent = '保存中';
+      }
+      try {
+        await saveWhitelistEntries(`${value} 已加入白名单并保存`);
+        if (button) button.textContent = '已加入';
+      } catch (error) {
+        showWhitelistFeedback(`${value} 加入失败：${error.message || error}`, 'error');
+        whitelistEntriesState = whitelistEntriesState.filter(item => item !== value);
+        renderWhitelistEntries();
+        if (button) {
+          button.disabled = false;
+          button.textContent = '加入';
+        }
+      }
+    };
+    const renderDoctor = doctor => {
+      const checks = doctor.checks || [];
+      const okCount = checks.filter(check => check.status === 'ok').length;
+      const generatedAt = doctor.generated_at ? new Date(doctor.generated_at).toLocaleString() : '刚刚';
+      text('doctorMeta', `${okCount}/${checks.length} 项通过 · ${generatedAt}`);
+      const container = document.getElementById('doctorChecks');
+      if (!checks.length) {
+        container.innerHTML = '<div class="table-empty">暂无自检结果</div>';
+        return;
+      }
+      container.innerHTML = checks.map(check => `
+        <div class="doctor-item">
+          <div>
+            <strong>${escapeHtml(check.label || check.key || '-')}</strong>
+            <span>${escapeHtml(check.detail || '-')}</span>
+            ${check.status === 'ok' ? '' : `<span>${escapeHtml(check.fix || '请检查本地配置')}</span>`}
+          </div>
+          <span class="status-badge doctor-status ${escapeHtml(check.status || 'warning')}">${check.status === 'ok' ? '正常' : '关注'}</span>
+        </div>
+      `).join('');
+    };
+    const refreshDoctor = async () => {
+      const response = await fetch('/api/doctor', { cache: 'no-store' });
+      renderDoctor(await response.json());
+    };
     const renderModelFilter = models => {
       const filter = document.getElementById('modelFilter');
       const entries = Object.entries(models)
@@ -2041,10 +2403,13 @@ DASHBOARD_HTML = """<!doctype html>
       const runtimeData = await runtimeRes.json();
       const p = data.proxy;
       const u = data.usage;
+      const comparison = data.comparison || {};
+      const previousProxy = comparison.previous?.proxy || {};
+      const previousUsage = comparison.previous?.usage || {};
       setMetric('totalRequests', fmt.format(p.total_requests));
-      text('requestSub', `较昨日 0% · 成功 ${fmt.format(p.successful_requests)} / 失败 ${fmt.format(p.failed_requests)}`);
+      text('requestSub', `${comparisonText(comparison, p.total_requests, previousProxy.total_requests)} · 成功 ${fmt.format(p.successful_requests)} / 失败 ${fmt.format(p.failed_requests)}`);
       setMetric('totalTokens', compactNumber(u.total_tokens), fmt.format(u.total_tokens));
-      text('tokenSub', `较昨日 0% · 输入 ${compactNumber(u.input_tokens)} / 输出 ${compactNumber(u.output_tokens)}`);
+      text('tokenSub', `${comparisonText(comparison, u.total_tokens, previousUsage.total_tokens)} · 输入 ${compactNumber(u.input_tokens)} / 输出 ${compactNumber(u.output_tokens)}`);
       setMetric(
         'cacheTokens',
         compactNumber(u.cache_read_input_tokens + u.cache_creation_input_tokens),
@@ -2053,10 +2418,10 @@ DASHBOARD_HTML = """<!doctype html>
       text('cacheSub', `读 ${compactNumber(u.cache_read_input_tokens)} / 写 ${compactNumber(u.cache_creation_input_tokens)}`);
       setMetric('avgLatency', `${fmt.format(p.average_connect_latency_ms || p.average_latency_ms || 0)}ms`);
       setMetric('successRateKpi', percent(p.success_rate));
-      text('successRate', `较昨日 0% · 持续 ${fmt.format(p.average_duration_ms || 0)}ms`);
-      text('latencySub', `较昨日 0% · 慢建连 ${fmt.format(p.slow_requests || 0)}`);
+      text('successRate', `${pointComparisonText(comparison, p.success_rate, previousProxy.success_rate)} · 持续 ${fmt.format(p.average_duration_ms || 0)}ms`);
+      text('latencySub', `${deltaComparisonText(comparison, p.average_connect_latency_ms || p.average_latency_ms || 0, previousProxy.average_connect_latency_ms || previousProxy.average_latency_ms, 'ms')} · 慢建连 ${fmt.format(p.slow_requests || 0)}`);
       setMetric('estimatedCost', money(u.cost.total), `${money(u.cost.total)} CNY`);
-      text('costSub', `较昨日 0% · API ${u.cost.billable_models} / 套餐 ${u.cost.token_plan_models} / 未计价 ${u.cost.unknown_models}`);
+      text('costSub', `${comparisonText(comparison, u.cost.total, previousUsage.cost?.total)} · API ${u.cost.billable_models} / 套餐 ${u.cost.token_plan_models} / 未计价 ${u.cost.unknown_models}`);
       renderAlerts(p);
       document.getElementById('routes').innerHTML = rows(Object.entries(p.routes));
       document.getElementById('models').innerHTML = modelRows(u.models);
@@ -2071,6 +2436,7 @@ DASHBOARD_HTML = """<!doctype html>
       updateShellStatus(runtimeData || {});
       renderModelFilter(u.models);
       renderTrendChart(trendData.points);
+      await Promise.allSettled([refreshWhitelist(), refreshDoctor()]);
       const refreshedAt = new Date().toLocaleTimeString();
       text('status', `最后刷新 ${refreshedAt}`);
       text('lastRefreshAt', `最后刷新 ${refreshedAt}`);
@@ -2152,6 +2518,18 @@ DASHBOARD_HTML = """<!doctype html>
     document.getElementById('themeToggle').addEventListener('click', () => {
       document.body.classList.toggle('dark-mode');
     });
+    document.getElementById('addWhitelistEntry').addEventListener('click', () => {
+      addWhitelistEntry(document.getElementById('whitelistInput').value);
+      showWhitelistFeedback('已加入本地列表，点击保存后写入 whitelist.txt', 'info');
+    });
+    document.getElementById('whitelistInput').addEventListener('keydown', event => {
+      if (event.key === 'Enter') {
+        addWhitelistEntry(event.target.value);
+        showWhitelistFeedback('已加入本地列表，点击保存后写入 whitelist.txt', 'info');
+      }
+    });
+    document.getElementById('saveWhitelist').addEventListener('click', saveWhitelistEntries);
+    document.getElementById('runDoctor').addEventListener('click', refreshDoctor);
     scheduleRefresh();
   </script>
 </body>
@@ -2167,6 +2545,8 @@ async def start_stats_server_with_status(
     host=DASHBOARD_HOST,
     port=DASHBOARD_PORT,
     status_provider=None,
+    whitelist_provider=None,
+    doctor_provider=None,
 ):
     server = await asyncio.start_server(
         lambda reader, writer: _handle_client(
@@ -2174,6 +2554,8 @@ async def start_stats_server_with_status(
             writer,
             stats_store,
             status_provider,
+            whitelist_provider,
+            doctor_provider,
         ),
         host,
         port,
@@ -2181,7 +2563,14 @@ async def start_stats_server_with_status(
     return server
 
 
-async def _handle_client(reader, writer, stats_store, status_provider=None):
+async def _handle_client(
+    reader,
+    writer,
+    stats_store,
+    status_provider=None,
+    whitelist_provider=None,
+    doctor_provider=None,
+):
     try:
         request_line = await asyncio.wait_for(reader.readline(), timeout=5)
         if not request_line:
@@ -2192,16 +2581,31 @@ async def _handle_client(reader, writer, stats_store, status_provider=None):
         method = parts[0] if len(parts) > 0 else "GET"
         target = parts[1] if len(parts) > 1 else "/"
 
+        content_length = 0
         while True:
             line = await reader.readline()
             if line in (b"\r\n", b"\n", b""):
                 break
+            header = line.decode("latin-1", errors="replace").strip()
+            name, separator, value = header.partition(":")
+            if separator and name.lower() == "content-length":
+                try:
+                    content_length = int(value.strip())
+                except ValueError:
+                    content_length = 0
+
+        request_body = b""
+        if content_length > 0:
+            request_body = await reader.readexactly(content_length)
 
         status, headers, body = handle_stats_request(
             method,
             urlparse(target),
             stats_store,
             status_provider=status_provider,
+            whitelist_provider=whitelist_provider,
+            doctor_provider=doctor_provider,
+            request_body=request_body,
         )
         reason = {
             200: "OK",

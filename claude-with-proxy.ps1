@@ -1,4 +1,5 @@
 ﻿# Claude Code 智能代理启动脚本
+$ProgressPreference = "SilentlyContinue"
 # 复制到 C:\Users\<用户名>\claude.ps1，修改下方路径后使用
 
 # ====== 改这两处 ======
@@ -18,21 +19,39 @@ function Test-LocalPort {
     return [bool](netstat -ano 2>$null | Select-String ":$Port.*LISTENING")
 }
 
-function Wait-StatsDashboard {
+function Wait-LocalPort {
     param(
+        [Parameter(Mandatory = $true)]
+        [string]$Port,
         [int]$TimeoutSeconds = 10
     )
 
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     while ((Get-Date) -lt $deadline) {
+        if (Test-LocalPort $Port) {
+            return $true
+        }
+        Start-Sleep -Milliseconds 150
+    }
+    return $false
+}
+
+function Wait-StatsDashboard {
+    param(
+        [int]$TimeoutSeconds = 10,
+        [int]$RequestTimeoutSeconds = 1
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
         try {
-            $response = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:8890/api/summary?range=day" -TimeoutSec 2
+            $response = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:8890/api/runtime-status" -TimeoutSec $RequestTimeoutSeconds
             if ($response.StatusCode -eq 200) {
                 return $true
             }
         }
         catch {
-            Start-Sleep -Milliseconds 300
+            Start-Sleep -Milliseconds 150
         }
     }
     return $false
@@ -40,23 +59,30 @@ function Wait-StatsDashboard {
 
 # 检查 sidecar / dashboard 是否已在运行，没有则自动拉起
 $proxyReady = Test-LocalPort "8889"
-$dashboardReady = Test-LocalPort "8890"
+$dashboardReady = (Test-LocalPort "8890") -and (Wait-StatsDashboard -TimeoutSeconds 1 -RequestTimeoutSeconds 1)
 if ($proxyReady -and -not $dashboardReady) {
     Write-Host "[proxy] 检测到旧版 sidecar 正在运行，但 dashboard 未启动。" -ForegroundColor Red
     Write-Host "[proxy] 请先停止占用 8889 的旧进程，再重新运行本脚本。" -ForegroundColor Yellow
     exit 1
 }
-if (-not ($proxyReady -and $dashboardReady)) {
+if ($proxyReady -and $dashboardReady) {
+    $sidecarStarted = $false
+}
+else {
     Write-Host "[proxy] 启动 sidecar + dashboard..." -ForegroundColor Yellow
     $logDir = Join-Path $SMART_PROXY_DIR "logs"
     New-Item -ItemType Directory -Force -Path $logDir | Out-Null
     $outLog = Join-Path $logDir "smart-proxy.out.log"
     $errLog = Join-Path $logDir "smart-proxy.err.log"
     Start-Process -WindowStyle Hidden -FilePath $PYTHON_PATH -ArgumentList "$SMART_PROXY_DIR\smart-proxy.py" -RedirectStandardOutput $outLog -RedirectStandardError $errLog
+    $sidecarStarted = $true
 }
 
-$proxyReady = Test-LocalPort "8889"
-$dashboardReady = (Test-LocalPort "8890") -and (Wait-StatsDashboard)
+if ($sidecarStarted) {
+    $proxyReady = Wait-LocalPort "8889" -TimeoutSeconds 5
+    $dashboardPortReady = Wait-LocalPort "8890" -TimeoutSeconds 5
+    $dashboardReady = $dashboardPortReady -and (Wait-StatsDashboard -TimeoutSeconds 8 -RequestTimeoutSeconds 1)
+}
 if (-not $proxyReady) {
     Write-Host "[proxy] 代理端口 8889 未就绪" -ForegroundColor Red
     Write-Host "[proxy] 日志: $SMART_PROXY_DIR\logs\smart-proxy.err.log" -ForegroundColor Yellow

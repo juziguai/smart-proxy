@@ -240,6 +240,26 @@ class RuntimeStatusTests(unittest.TestCase):
         self.assertEqual(whitelist.pattern_count, 2)
         self.assertEqual(whitelist.path, str(whitelist_path))
         self.assertTrue(whitelist.loaded_at)
+        self.assertEqual(
+            whitelist.entries(),
+            ["*.minimaxi.com", "api.deepseek.com"],
+        )
+
+    def test_whitelist_saves_entries(self):
+        tmp_dir = self.enterContext(TemporaryDirectory())
+        whitelist_path = Path(tmp_dir) / "whitelist.txt"
+        whitelist = smart_proxy.Whitelist(str(whitelist_path), 60)
+
+        saved = whitelist.save_entries([
+            " api.deepseek.com ",
+            "*.minimaxi.com",
+            "api.deepseek.com",
+            "",
+        ])
+
+        self.assertEqual(saved, ["*.minimaxi.com", "api.deepseek.com"])
+        self.assertEqual(whitelist.pattern_count, 2)
+        self.assertIn("api.deepseek.com", whitelist_path.read_text("utf-8"))
 
     def test_runtime_status_reports_proxy_and_whitelist_metadata(self):
         class RuntimeWhitelist:

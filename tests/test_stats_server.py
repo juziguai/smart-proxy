@@ -38,6 +38,7 @@ class StatsServerTests(unittest.TestCase):
         self.assertEqual(payload["proxy"]["hosts"][0]["host"], "api.example.com")
         self.assertIn("alerts", payload["proxy"])
         self.assertIn("alert_counts", payload["proxy"])
+        self.assertIn("comparison", payload)
 
     def test_clear_proxy_stats_endpoint_clears_proxy_events(self):
         with TemporaryDirectory() as temp_dir:
@@ -149,6 +150,70 @@ class StatsServerTests(unittest.TestCase):
         self.assertEqual(payload["upstream_proxy"], "127.0.0.1:10808")
         self.assertEqual(payload["whitelist_count"], 3)
 
+    def test_whitelist_endpoint_reads_and_saves_entries(self):
+        class WhitelistProvider:
+            def __init__(self):
+                self.entries = ["*.minimaxi.com"]
+
+            def get(self):
+                return {
+                    "entries": self.entries,
+                    "path": "whitelist.txt",
+                    "count": len(self.entries),
+                    "loaded_at": "2026-05-11T00:00:00+00:00",
+                    "candidates": [{"host": "api.deepseek.com"}],
+                }
+
+            def save(self, payload):
+                self.entries = payload["entries"]
+                return {"ok": True, "entries": self.entries}
+
+        with TemporaryDirectory() as temp_dir:
+            store = StatsStore(f"{temp_dir}/stats.db")
+            provider = WhitelistProvider()
+
+            status, _headers, body = handle_stats_request(
+                "GET",
+                urlparse("/api/whitelist"),
+                store,
+                whitelist_provider=provider,
+            )
+            get_payload = json.loads(body.decode("utf-8"))
+            post_status, _post_headers, post_body = handle_stats_request(
+                "POST",
+                urlparse("/api/whitelist"),
+                store,
+                whitelist_provider=provider,
+                request_body=b'{"entries":["api.deepseek.com"]}',
+            )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(get_payload["entries"], ["*.minimaxi.com"])
+        self.assertEqual(get_payload["candidates"][0]["host"], "api.deepseek.com")
+        self.assertEqual(post_status, 200)
+        self.assertEqual(
+            json.loads(post_body.decode("utf-8"))["entries"],
+            ["api.deepseek.com"],
+        )
+
+    def test_doctor_endpoint_returns_checks(self):
+        with TemporaryDirectory() as temp_dir:
+            store = StatsStore(f"{temp_dir}/stats.db")
+
+            status, _headers, body = handle_stats_request(
+                "GET",
+                urlparse("/api/doctor"),
+                store,
+                doctor_provider=lambda: {
+                    "generated_at": "2026-05-11T00:00:00+00:00",
+                    "checks": [{"key": "python", "status": "ok"}],
+                },
+            )
+
+        payload = json.loads(body.decode("utf-8"))
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["checks"][0]["key"], "python")
+
     def test_unknown_endpoint_returns_404_json(self):
         with TemporaryDirectory() as temp_dir:
             store = StatsStore(f"{temp_dir}/stats.db")
@@ -202,6 +267,8 @@ class StatsServerTests(unittest.TestCase):
         self.assertIn('data-tab-target="usage"', html)
         self.assertIn('data-tab-target="whitelist"', html)
         self.assertIn('data-tab-target="doctor"', html)
+        self.assertIn("/api/whitelist", html)
+        self.assertIn("/api/doctor", html)
         self.assertIn("switchTab", html)
 
     def test_dashboard_matches_reference_console_layout(self):
@@ -222,7 +289,8 @@ class StatsServerTests(unittest.TestCase):
         self.assertIn('class="health-banner"', html)
         self.assertIn('id="systemHealthText"', html)
         self.assertIn('class="metric-icon"', html)
-        self.assertIn("较昨日", html)
+        self.assertIn("comparisonText", html)
+        self.assertIn("等待对比", html)
         self.assertIn('id="timeWindow"', html)
         self.assertIn('id="autoRefresh"', html)
         self.assertIn('id="themeToggle"', html)
@@ -255,12 +323,19 @@ class StatsServerTests(unittest.TestCase):
         self.assertIn("requestAdviceText", html)
         self.assertIn("alertObservedAt", html)
         self.assertIn("聚合告警", html)
+        self.assertIn("whitelistFeedback", html)
+        self.assertIn("addWhitelistCandidate", html)
+        self.assertIn("whitelistMatchesHost", html)
+        self.assertIn("已加入", html)
         self.assertIn("anomaly-card", html)
         self.assertIn("anomaly-list", html)
         self.assertIn("providerGroups", html)
         self.assertIn("provider-logo", html)
         self.assertIn("provider-subtitle", html)
         self.assertIn("successRateText", html)
+        self.assertIn("changeText", html)
+        self.assertIn("deltaComparisonText", html)
+        self.assertIn("pointComparisonText", html)
         self.assertIn("normalizeTrendPoints", html)
         self.assertIn("metric-card .value", html)
 

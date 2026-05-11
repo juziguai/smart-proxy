@@ -4,10 +4,13 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import fnmatch
 import os
+from pathlib import Path
+import socket
 import sys
 import time
 import winreg
 
+from claude_usage_reader import ClaudeUsageReader
 from stats_store import ProxyRequestEvent, StatsStore
 from stats_server import (
     DASHBOARD_HOST,
@@ -106,18 +109,47 @@ class Whitelist:
         except FileNotFoundError:
             self._patterns = set()
         self._loaded_at = datetime.now(timezone.utc).isoformat()
+        self._expires = time.monotonic() + self._interval
 
     def refresh_if_needed(self):
         now = time.monotonic()
         if now >= self._expires:
             self._load()
-            self._expires = now + self._interval
+
+    def reload(self):
+        self._load()
 
     def match(self, host):
         self.refresh_if_needed()
         if not self._patterns:
             return False
         return any(fnmatch.fnmatch(host, p) for p in self._patterns)
+
+    def entries(self):
+        self.refresh_if_needed()
+        return sorted(self._patterns)
+
+    def save_entries(self, entries):
+        cleaned = []
+        seen = set()
+        for entry in entries:
+            value = str(entry).strip()
+            if not value or value.startswith("#"):
+                continue
+            if any(char.isspace() for char in value):
+                raise ValueError(f"invalid whitelist entry: {value}")
+            if value not in seen:
+                seen.add(value)
+                cleaned.append(value)
+        directory = os.path.dirname(self._path)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        with open(self._path, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write("# Managed by Smart Proxy Console\n")
+            for entry in cleaned:
+                handle.write(f"{entry}\n")
+        self._load()
+        return self.entries()
 
     @property
     def path(self):
@@ -133,6 +165,142 @@ class Whitelist:
 
 
 whitelist = Whitelist(WHITELIST_FILE, WHITELIST_RELOAD_SEC)
+
+
+class WhitelistProvider:
+    def __init__(self, whitelist_obj, store_getter):
+        self._whitelist = whitelist_obj
+        self._store_getter = store_getter
+
+    def get(self):
+        self._whitelist.refresh_if_needed()
+        store = self._store_getter()
+        candidates = store.get_whitelist_candidates(limit=12) if store else []
+        entries = self._whitelist.entries()
+        return {
+            "entries": entries,
+            "path": self._whitelist.path,
+            "count": len(entries),
+            "loaded_at": self._whitelist.loaded_at,
+            "candidates": candidates,
+        }
+
+    def save(self, payload):
+        entries = payload.get("entries")
+        if not isinstance(entries, list):
+            raise ValueError("entries must be a list")
+        saved = self._whitelist.save_entries(entries)
+        return {
+            "ok": True,
+            "entries": saved,
+            "count": len(saved),
+            "path": self._whitelist.path,
+            "loaded_at": self._whitelist.loaded_at,
+        }
+
+
+def _check_socket(host, port, timeout=0.35):
+    started = time.monotonic()
+    try:
+        with socket.create_connection((host, int(port)), timeout=timeout):
+            return True, elapsed_ms(started), ""
+    except OSError as exc:
+        return False, elapsed_ms(started), str(exc)
+
+
+def _doctor_item(key, label, ok, detail, fix=""):
+    return {
+        "key": key,
+        "label": label,
+        "status": "ok" if ok else "warning",
+        "detail": detail,
+        "fix": fix,
+    }
+
+
+def build_doctor_report():
+    upstream = proxy_cache.get()
+    whitelist.refresh_if_needed()
+    reader = ClaudeUsageReader()
+    projects_dir = reader.projects_dir
+    transcript_files = []
+    if projects_dir.exists():
+        transcript_files = list(projects_dir.rglob("*.jsonl"))[:200]
+
+    proxy_ok, proxy_ms, proxy_error = _check_socket(LISTEN_HOST, LISTEN_PORT)
+    dashboard_ok, dashboard_ms, dashboard_error = _check_socket(
+        DASHBOARD_HOST,
+        DASHBOARD_PORT,
+    )
+    upstream_ok = True
+    upstream_detail = "当前系统代理未启用，Smart Proxy 将直连上游。"
+    if upstream:
+        upstream_ok, upstream_ms, upstream_error = _check_socket(
+            upstream[0],
+            upstream[1],
+        )
+        upstream_detail = (
+            f"{upstream[0]}:{upstream[1]} 可连接，耗时 {upstream_ms}ms"
+            if upstream_ok
+            else f"{upstream[0]}:{upstream[1]} 不可连接：{upstream_error}"
+        )
+
+    checks = [
+        _doctor_item(
+            "proxy_port",
+            "Proxy 端口",
+            proxy_ok,
+            (
+                f"{LISTEN_HOST}:{LISTEN_PORT} 正在监听，连接 {proxy_ms}ms"
+                if proxy_ok
+                else f"{LISTEN_HOST}:{LISTEN_PORT} 未连通：{proxy_error}"
+            ),
+            "确认 smart-proxy.py 正在运行，且端口未被旧进程占用。",
+        ),
+        _doctor_item(
+            "dashboard_port",
+            "Dashboard 端口",
+            dashboard_ok,
+            (
+                f"{DASHBOARD_HOST}:{DASHBOARD_PORT} 正在监听，连接 {dashboard_ms}ms"
+                if dashboard_ok
+                else f"{DASHBOARD_HOST}:{DASHBOARD_PORT} 未连通：{dashboard_error}"
+            ),
+            "重新运行 claude.ps1 或检查 8890 端口占用。",
+        ),
+        _doctor_item(
+            "python",
+            "Python 路径",
+            bool(sys.executable and os.path.exists(sys.executable)),
+            sys.executable or "未检测到 Python executable",
+            "确认脚本使用的 Python 可执行文件存在。",
+        ),
+        _doctor_item(
+            "transcripts",
+            "Claude transcript",
+            projects_dir.exists() and len(transcript_files) > 0,
+            f"{projects_dir}，已发现 {len(transcript_files)} 个 transcript 文件",
+            "如果这里为 0，确认 CLAUDE_CONFIG_DIR 或 ~/.claude/projects 路径。",
+        ),
+        _doctor_item(
+            "whitelist",
+            "白名单",
+            os.path.exists(whitelist.path),
+            f"{whitelist.path}，当前 {whitelist.pattern_count} 条",
+            "如果文件不存在，可在 Whitelist 页保存一次自动创建。",
+        ),
+        _doctor_item(
+            "upstream",
+            "系统代理 / 上游代理",
+            upstream_ok,
+            upstream_detail,
+            "检查 Windows 系统代理设置或上游代理进程。",
+        ),
+    ]
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "checks": checks,
+    }
 
 
 def build_runtime_status():
@@ -518,6 +686,8 @@ async def main():
         DASHBOARD_HOST,
         DASHBOARD_PORT,
         status_provider=build_runtime_status,
+        whitelist_provider=WhitelistProvider(whitelist, lambda: stats_store),
+        doctor_provider=build_doctor_report,
     )
     log(f"listening {LISTEN_HOST}:{LISTEN_PORT}  |  mode: auto-detect Windows system proxy  |  cache: {CACHE_SEC}s")
     log(f"dashboard http://{DASHBOARD_HOST}:{DASHBOARD_PORT}")

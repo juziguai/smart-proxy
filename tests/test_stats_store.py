@@ -285,6 +285,7 @@ class StatsStoreTests(unittest.TestCase):
         recent = store.get_recent_proxy_requests(limit=1)[0]
 
         self.assertEqual(host["slow_requests"], 5)
+        self.assertEqual(summary["proxy"]["slow_requests"], 5)
         self.assertEqual(summary["proxy"]["alerts"][0]["kind"], "slow_requests")
         self.assertTrue(recent["slow"])
 
@@ -438,6 +439,42 @@ class StatsStoreTests(unittest.TestCase):
         self.assertEqual(recent[0]["error"], "timeout")
         self.assertFalse(recent[0]["slow"])
         self.assertEqual(recent[1]["host"], "api-1.example.com")
+
+    def test_whitelist_candidates_rank_proxy_hosts(self):
+        tmp_path = self.enterContext(TemporaryDirectoryPath())
+        store = StatsStore(tmp_path / "stats.db")
+
+        events = [
+            ("api.deepseek.com", "proxy", 4_000),
+            ("api.deepseek.com", "proxy", 120),
+            ("www.minimaxi.com", "direct_whitelist", 90),
+            ("api.github.com", "proxy", 800),
+        ]
+        for index, (host, route, latency) in enumerate(events, start=1):
+            store.record_proxy_request(
+                ProxyRequestEvent(
+                    started_at=iso_at(index),
+                    completed_at=iso_at(index),
+                    method="CONNECT",
+                    host=host,
+                    route=route,
+                    success=True,
+                    latency_ms=latency,
+                    error=None,
+                    connect_latency_ms=latency,
+                    duration_ms=latency,
+                )
+            )
+
+        candidates = store.get_whitelist_candidates(limit=5)
+
+        self.assertEqual(candidates[0]["host"], "api.deepseek.com")
+        self.assertEqual(candidates[0]["proxy_requests"], 2)
+        self.assertEqual(candidates[0]["slow_requests"], 1)
+        self.assertNotIn(
+            "www.minimaxi.com",
+            [candidate["host"] for candidate in candidates],
+        )
 
     def test_recent_proxy_requests_marks_slow_events(self):
         tmp_path = self.enterContext(TemporaryDirectoryPath())
@@ -595,6 +632,87 @@ class StatsStoreTests(unittest.TestCase):
         summary = store.get_summary("all")
         self.assertEqual(summary["usage"]["input_tokens"], 100)
         self.assertEqual(summary["usage"]["output_tokens"], 20)
+
+    def test_summary_includes_previous_period_comparison(self):
+        tmp_path = self.enterContext(TemporaryDirectoryPath())
+        store = StatsStore(tmp_path / "stats.db")
+
+        yesterday = datetime(
+            2026, 5, 9, 8, 0, 0, tzinfo=timezone.utc
+        ).isoformat()
+        today_a = datetime(
+            2026, 5, 10, 8, 0, 0, tzinfo=timezone.utc
+        ).isoformat()
+        today_b = datetime(
+            2026, 5, 10, 9, 0, 0, tzinfo=timezone.utc
+        ).isoformat()
+        for timestamp in (yesterday, today_a, today_b):
+            store.record_proxy_request(
+                ProxyRequestEvent(
+                    started_at=timestamp,
+                    completed_at=timestamp,
+                    method="CONNECT",
+                    host="api.deepseek.com",
+                    route="proxy",
+                    success=True,
+                    latency_ms=100,
+                    error=None,
+                    connect_latency_ms=100,
+                    duration_ms=100,
+                )
+            )
+        store.upsert_usage_event(
+            UsageEvent(
+                source_file="yesterday.jsonl",
+                source_line=1,
+                timestamp=yesterday,
+                session_id="session-y",
+                model="deepseek-v4-flash",
+                input_tokens=50,
+                output_tokens=25,
+                cache_read_input_tokens=0,
+                cache_creation_input_tokens=0,
+                web_search_requests=0,
+                web_fetch_requests=0,
+                service_tier="standard",
+                speed="fast",
+            )
+        )
+        store.upsert_usage_event(
+            UsageEvent(
+                source_file="today.jsonl",
+                source_line=1,
+                timestamp=today_a,
+                session_id="session-t",
+                model="deepseek-v4-flash",
+                input_tokens=100,
+                output_tokens=50,
+                cache_read_input_tokens=0,
+                cache_creation_input_tokens=0,
+                web_search_requests=0,
+                web_fetch_requests=0,
+                service_tier="standard",
+                speed="fast",
+            )
+        )
+
+        summary = store.get_summary(
+            "day",
+            now="2026-05-10T12:00:00+00:00",
+        )
+        previous = summary["comparison"]["previous"]
+
+        self.assertTrue(summary["comparison"]["available"])
+        self.assertEqual(summary["comparison"]["label"], "较昨日")
+        self.assertEqual(summary["proxy"]["total_requests"], 2)
+        self.assertEqual(previous["proxy"]["total_requests"], 1)
+        self.assertNotIn("hosts", previous["proxy"])
+        self.assertEqual(summary["usage"]["total_tokens"], 150)
+        self.assertEqual(previous["usage"]["total_tokens"], 75)
+        self.assertNotIn("models", previous["usage"])
+
+        all_time = store.get_summary("all")
+        self.assertFalse(all_time["comparison"]["available"])
 
     def test_summary_estimates_api_cost_and_marks_token_plan_models(self):
         tmp_path = self.enterContext(TemporaryDirectoryPath())

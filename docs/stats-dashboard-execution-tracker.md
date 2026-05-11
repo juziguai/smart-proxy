@@ -39,6 +39,8 @@ Status legend:
 | 25 | Done | Operational anomaly guidance | Recent anomaly table now separates level/type/object, replaces placeholder `-` with observed time or aggregate-alert source, and adds handling advice per alert/request | Dense-layout HTML test covers advice/time helpers; full suite passes; live screenshot captured at `logs/dashboard-anomaly-guidance.png` |
 | 26 | Done | Anomaly card layout | Recent anomalies render as responsive alert cards instead of a narrow six-column table, preventing Chinese labels from wrapping vertically in compact panels | Dense-layout HTML test covers anomaly card hooks; full suite passes; live screenshot captured at `logs/dashboard-anomaly-cards.png` |
 | 27 | Done | Backend alert noise gating | Slow-connect backend alerts now prioritize model API hosts, require higher volume for developer services, and suppress noisy content-site slow connects so system health focuses on Claude Code impact | Added regression covering GitHub/Douyin suppression and DeepSeek retention; full suite passes |
+| 28 | Done | Real previous-period KPI comparison | Summary API now returns previous-period data for day/week/month ranges, and KPI subtitles render real changes instead of hard-coded `较昨日 0%` placeholders | Added summary comparison regression; full suite passes |
+| 29 | Done | Whitelist and Doctor tabs | Whitelist tab now reads/saves `whitelist.txt` and shows proxy-route candidates; Doctor tab now runs local service, Python, transcript, whitelist, and upstream proxy checks | Added API, store, and whitelist persistence tests; full suite passes |
 
 ## Current Decision Log
 
