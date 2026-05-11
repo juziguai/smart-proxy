@@ -255,6 +255,8 @@ class StatsServerTests(unittest.TestCase):
         self.assertIn("requestAdviceText", html)
         self.assertIn("alertObservedAt", html)
         self.assertIn("聚合告警", html)
+        self.assertIn("anomaly-card", html)
+        self.assertIn("anomaly-list", html)
         self.assertIn("providerGroups", html)
         self.assertIn("provider-logo", html)
         self.assertIn("provider-subtitle", html)

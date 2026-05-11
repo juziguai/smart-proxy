@@ -37,6 +37,7 @@ Status legend:
 | 23 | Done | Alert label readability | Health-banner alert chips use concise Chinese provider summaries instead of raw backend English messages, with detailed text kept in tooltips and the anomaly table | Dense-layout HTML test covers alert label helpers; full suite passes; live screenshot captured at `logs/dashboard-alert-labels.png` |
 | 24 | Done | Raw enum display cleanup | Dashboard maps raw alert severities, alert kinds, and synthetic model labels into Chinese UI copy while keeping raw values in titles for diagnostics | Dense-layout HTML test covers enum/model label helpers; full suite passes; live screenshot captured at `logs/dashboard-alert-labels-2.png` |
 | 25 | Done | Operational anomaly guidance | Recent anomaly table now separates level/type/object, replaces placeholder `-` with observed time or aggregate-alert source, and adds handling advice per alert/request | Dense-layout HTML test covers advice/time helpers; full suite passes; live screenshot captured at `logs/dashboard-anomaly-guidance.png` |
+| 26 | Done | Anomaly card layout | Recent anomalies render as responsive alert cards instead of a narrow six-column table, preventing Chinese labels from wrapping vertically in compact panels | Dense-layout HTML test covers anomaly card hooks; full suite passes; live screenshot captured at `logs/dashboard-anomaly-cards.png` |
 
 ## Current Decision Log
 

@@ -934,6 +934,63 @@ DASHBOARD_HTML = """<!doctype html>
       line-height: 1.45;
       min-width: 150px;
     }
+    .anomaly-list {
+      display: grid;
+      gap: 10px;
+      padding-top: 10px;
+    }
+    .anomaly-card {
+      display: grid;
+      grid-template-columns: minmax(72px, 0.34fr) minmax(220px, 1fr) minmax(190px, 0.9fr);
+      gap: 14px;
+      align-items: center;
+      border-top: 1px solid #edf1f7;
+      padding: 14px 0 4px;
+    }
+    .anomaly-meta {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+      min-width: 0;
+    }
+    .anomaly-kind {
+      color: #1f2a3d;
+      font-size: 13px;
+      font-weight: 950;
+      white-space: nowrap;
+    }
+    .anomaly-main {
+      min-width: 0;
+    }
+    .anomaly-main strong {
+      display: block;
+      color: #07172f;
+      font-size: 14px;
+      font-weight: 950;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .anomaly-main span,
+    .anomaly-side span {
+      color: var(--muted);
+      display: block;
+      font-size: 12px;
+      font-weight: 780;
+      line-height: 1.45;
+      margin-top: 4px;
+    }
+    .anomaly-side {
+      min-width: 0;
+    }
+    .anomaly-side strong {
+      color: #344154;
+      display: block;
+      font-size: 12px;
+      font-weight: 900;
+      line-height: 1.45;
+    }
     .status-badge {
       display: inline-flex;
       align-items: center;
@@ -1078,6 +1135,7 @@ DASHBOARD_HTML = """<!doctype html>
       .shell-status { justify-content: flex-start; }
       .alerts-panel { grid-template-columns: 1fr; }
       .runtime-item, .host-row, .request-row { grid-template-columns: 1fr; }
+      .anomaly-card { grid-template-columns: 1fr; }
       .request-time { white-space: normal; }
     }
   </style>
@@ -1775,27 +1833,39 @@ DASHBOARD_HTML = """<!doctype html>
     const anomalyTableRows = (requests, alerts) => {
       const requestAnomalies = (requests || []).filter(request => !request.success || request.slow).slice(0, 5);
       const alertRows = (alerts || []).slice(0, 3).map(alert => `
-        <tr>
-          <td>${escapeHtml(severityLabel(alert.severity))}</td>
-          <td><strong>${escapeHtml(alertKindLabel(alert.kind))}</strong></td>
-          <td><strong>${escapeHtml(alert.host || '-')}</strong></td>
-          <td>${escapeHtml(alertDetailText(alert))}</td>
-          <td class="advice-text">${escapeHtml(alertAdviceText(alert))}</td>
-          <td>${escapeHtml(alertObservedAt(alert, requests))}</td>
-        </tr>
+        <article class="anomaly-card">
+          <div class="anomaly-meta">
+            <span class="status-badge ${alert.severity === 'critical' ? 'bad' : 'warn'}">${escapeHtml(severityLabel(alert.severity))}</span>
+            <span class="anomaly-kind">${escapeHtml(alertKindLabel(alert.kind))}</span>
+          </div>
+          <div class="anomaly-main">
+            <strong title="${escapeHtml(alert.host || '-')}">${escapeHtml(alert.host || '-')}</strong>
+            <span>${escapeHtml(alertDetailText(alert))}</span>
+          </div>
+          <div class="anomaly-side">
+            <strong>${escapeHtml(alertAdviceText(alert))}</strong>
+            <span>${escapeHtml(alertObservedAt(alert, requests))}</span>
+          </div>
+        </article>
       `);
       const requestRows = requestAnomalies.map(request => {
         const kind = request.success ? '慢请求' : '失败请求';
         const when = request.started_at ? new Date(request.started_at).toLocaleTimeString() : '-';
         return `
-          <tr>
-            <td>${request.success ? '提醒' : '严重'}</td>
-            <td>${escapeHtml(kind)}</td>
-            <td><strong>${escapeHtml(request.host || '-')}</strong></td>
-            <td>${escapeHtml(request.error || routeText(request.route || '-'))}</td>
-            <td class="advice-text">${escapeHtml(requestAdviceText(request))}</td>
-            <td>${escapeHtml(when)}</td>
-          </tr>
+          <article class="anomaly-card">
+            <div class="anomaly-meta">
+              <span class="status-badge ${request.success ? 'warn' : 'bad'}">${request.success ? '提醒' : '严重'}</span>
+              <span class="anomaly-kind">${escapeHtml(kind)}</span>
+            </div>
+            <div class="anomaly-main">
+              <strong title="${escapeHtml(request.host || '-')}">${escapeHtml(request.host || '-')}</strong>
+              <span>${escapeHtml(request.error || routeText(request.route || '-'))}</span>
+            </div>
+            <div class="anomaly-side">
+              <strong>${escapeHtml(requestAdviceText(request))}</strong>
+              <span>${escapeHtml(when)}</span>
+            </div>
+          </article>
         `;
       });
       const rows = [...alertRows, ...requestRows].join('');
@@ -1803,10 +1873,7 @@ DASHBOARD_HTML = """<!doctype html>
         return '<div class="table-empty">当前范围内暂无异常请求</div>';
       }
       return `
-        <table class="data-table">
-          <thead><tr><th>级别</th><th>类型</th><th>对象</th><th>说明</th><th>建议</th><th>时间</th></tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
+        <div class="anomaly-list">${rows}</div>
       `;
     };
     const runtimeRows = status => {
