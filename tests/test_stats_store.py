@@ -223,9 +223,8 @@ class StatsStoreTests(unittest.TestCase):
         self.assertEqual(host["slow_requests"], 1)
         self.assertEqual(host["failure_rate"], 0.2)
         self.assertEqual(host["health"], "warning")
-        self.assertEqual(proxy["alert_counts"], {"critical": 0, "warning": 2})
+        self.assertEqual(proxy["alert_counts"], {"critical": 0, "warning": 1})
         self.assertEqual(proxy["alerts"][0]["kind"], "host_failures")
-        self.assertEqual(proxy["alerts"][1]["kind"], "slow_requests")
 
     def test_long_connect_tunnel_duration_does_not_mark_slow_request(self):
         tmp_path = self.enterContext(TemporaryDirectoryPath())
@@ -265,28 +264,65 @@ class StatsStoreTests(unittest.TestCase):
         tmp_path = self.enterContext(TemporaryDirectoryPath())
         store = StatsStore(tmp_path / "stats.db")
 
-        store.record_proxy_request(
-            ProxyRequestEvent(
-                started_at=iso_at(1),
-                completed_at=iso_at(1),
-                method="CONNECT",
-                host="api.slow-connect.example.com",
-                route="proxy",
-                success=True,
-                latency_ms=30_000,
-                error=None,
-                connect_latency_ms=3_000,
-                duration_ms=30_000,
+        for index in range(5):
+            store.record_proxy_request(
+                ProxyRequestEvent(
+                    started_at=iso_at(index + 1),
+                    completed_at=iso_at(index + 1),
+                    method="CONNECT",
+                    host="api.slow-connect.example.com",
+                    route="proxy",
+                    success=True,
+                    latency_ms=30_000,
+                    error=None,
+                    connect_latency_ms=3_000,
+                    duration_ms=30_000,
+                )
             )
-        )
 
         summary = store.get_summary("all")
         host = summary["proxy"]["hosts"][0]
         recent = store.get_recent_proxy_requests(limit=1)[0]
 
-        self.assertEqual(host["slow_requests"], 1)
+        self.assertEqual(host["slow_requests"], 5)
         self.assertEqual(summary["proxy"]["alerts"][0]["kind"], "slow_requests")
         self.assertTrue(recent["slow"])
+
+    def test_slow_alerts_prioritize_model_api_and_suppress_noise(self):
+        tmp_path = self.enterContext(TemporaryDirectoryPath())
+        store = StatsStore(tmp_path / "stats.db")
+
+        events = [
+            ("api.github.com", 9),
+            ("www.douyin.com", 5),
+            ("api.deepseek.com", 2),
+            ("api.anthropic.com", 1),
+        ]
+        minute = 1
+        for host, count in events:
+            for _ in range(count):
+                store.record_proxy_request(
+                    ProxyRequestEvent(
+                        started_at=iso_at(minute),
+                        completed_at=iso_at(minute),
+                        method="CONNECT",
+                        host=host,
+                        route="proxy",
+                        success=True,
+                        latency_ms=4_000,
+                        error=None,
+                        connect_latency_ms=4_000,
+                        duration_ms=4_000,
+                    )
+                )
+                minute += 1
+
+        alerts = store.get_summary("all")["proxy"]["alerts"]
+
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0]["kind"], "slow_requests")
+        self.assertEqual(alerts[0]["host"], "api.deepseek.com")
+        self.assertEqual(alerts[0]["value"], 2)
 
     def test_migrated_legacy_connect_duration_does_not_mark_slow_request(self):
         tmp_path = self.enterContext(TemporaryDirectoryPath())

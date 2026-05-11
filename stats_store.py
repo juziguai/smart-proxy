@@ -10,6 +10,23 @@ from pricing import aggregate_cost, estimate_usage_cost
 SLOW_REQUEST_THRESHOLD_MS = 3000
 HOST_FAILURE_RATE_THRESHOLD = 0.10
 HOST_CRITICAL_FAILURE_RATE = 0.50
+MODEL_API_SLOW_ALERT_MIN_COUNT = 2
+DEVELOPER_SERVICE_SLOW_ALERT_MIN_COUNT = 10
+GENERIC_SLOW_ALERT_MIN_COUNT = 5
+
+MODEL_API_HOST_MARKERS = (
+    "api.deepseek.com",
+    "api.minimaxi.com",
+    "api.anthropic.com",
+    "platform.xiaomimimo.com",
+)
+DEVELOPER_SERVICE_HOST_MARKERS = (
+    "github.com",
+    "api.github.com",
+)
+CONTENT_SITE_HOST_MARKERS = (
+    "douyin.com",
+)
 
 
 @dataclass(frozen=True)
@@ -458,7 +475,7 @@ class StatsStore:
                         "value": host["alert_failure_rate"],
                     }
                 )
-            if host["slow_requests"] > 0:
+            if self._should_alert_slow_host(host):
                 alerts.append(
                     {
                         "severity": "warning",
@@ -472,6 +489,30 @@ class StatsStore:
                     }
                 )
         return alerts[:8]
+
+    def _should_alert_slow_host(self, host):
+        slow_requests = host["slow_requests"]
+        if slow_requests <= 0:
+            return False
+
+        category = self._alert_host_category(host["host"])
+        if category == "model_api":
+            return slow_requests >= MODEL_API_SLOW_ALERT_MIN_COUNT
+        if category == "developer_service":
+            return slow_requests >= DEVELOPER_SERVICE_SLOW_ALERT_MIN_COUNT
+        if category == "content_site":
+            return False
+        return slow_requests >= GENERIC_SLOW_ALERT_MIN_COUNT
+
+    def _alert_host_category(self, host):
+        value = (host or "").lower()
+        if any(marker in value for marker in MODEL_API_HOST_MARKERS):
+            return "model_api"
+        if any(marker in value for marker in DEVELOPER_SERVICE_HOST_MARKERS):
+            return "developer_service"
+        if any(marker in value for marker in CONTENT_SITE_HOST_MARKERS):
+            return "content_site"
+        return "generic"
 
     def _get_usage_summary(self, since):
         where = ""
