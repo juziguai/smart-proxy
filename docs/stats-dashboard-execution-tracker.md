@@ -36,6 +36,7 @@ Status legend:
 | 22 | Done | Dense data visual polish | Dashboard handles real high-volume data better: KPI values fit cards, alert chips collapse with `+N`, Provider health groups hosts into provider rows, and day trend fills hourly buckets | Added dense-layout HTML test; full suite passes; live screenshot captured at `logs/dashboard-polished-reference-2.png` |
 | 23 | Done | Alert label readability | Health-banner alert chips use concise Chinese provider summaries instead of raw backend English messages, with detailed text kept in tooltips and the anomaly table | Dense-layout HTML test covers alert label helpers; full suite passes; live screenshot captured at `logs/dashboard-alert-labels.png` |
 | 24 | Done | Raw enum display cleanup | Dashboard maps raw alert severities, alert kinds, and synthetic model labels into Chinese UI copy while keeping raw values in titles for diagnostics | Dense-layout HTML test covers enum/model label helpers; full suite passes; live screenshot captured at `logs/dashboard-alert-labels-2.png` |
+| 25 | Done | Operational anomaly guidance | Recent anomaly table now separates level/type/object, replaces placeholder `-` with observed time or aggregate-alert source, and adds handling advice per alert/request | Dense-layout HTML test covers advice/time helpers; full suite passes; live screenshot captured at `logs/dashboard-anomaly-guidance.png` |
 
 ## Current Decision Log
 

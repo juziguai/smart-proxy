@@ -922,6 +922,18 @@ DASHBOARD_HTML = """<!doctype html>
       color: #697386;
       font-weight: 900;
     }
+    .data-table th:last-child,
+    .data-table td:last-child {
+      min-width: 82px;
+      white-space: nowrap;
+    }
+    .advice-text {
+      color: #344154;
+      font-size: 12px;
+      font-weight: 850;
+      line-height: 1.45;
+      min-width: 150px;
+    }
     .status-badge {
       display: inline-flex;
       align-items: center;
@@ -1473,6 +1485,50 @@ DASHBOARD_HTML = """<!doctype html>
       }
       return alert.message || alert.kind || '异常';
     };
+    const hostIntent = host => {
+      const value = String(host || '').toLowerCase();
+      if (value.includes('api.deepseek.com') || value.includes('api.minimaxi.com') || value.includes('anthropic')) {
+        return 'model_api';
+      }
+      if (value.includes('github')) return 'developer_service';
+      if (value.includes('douyin')) return 'content_site';
+      return 'generic';
+    };
+    const alertAdviceText = alert => {
+      const intent = hostIntent(alert.host);
+      if (alert.kind === 'host_failures') {
+        return intent === 'model_api'
+          ? '模型链路失败，优先检查上游代理、Key 与限流'
+          : '失败率偏高，先看是否需要白名单直连或临时降噪';
+      }
+      if (alert.kind === 'slow_requests') {
+        if (intent === 'model_api') return '会影响模型响应，建议重点观察上游代理和线路';
+        if (intent === 'developer_service') return '开发依赖较慢，可考虑加入白名单直连';
+        if (intent === 'content_site') return '非核心链路，通常可忽略或加入白名单降延迟';
+        return '建连偏慢，建议结合 Host 频率判断是否白名单直连';
+      }
+      return '先观察频率，持续出现再处理';
+    };
+    const requestAdviceText = request => {
+      if (!request.success) return '单次请求失败，优先查看错误信息和上游可用性';
+      if (request.slow) return '单次请求偏慢，若重复出现再考虑白名单或换线路';
+      return '观察即可';
+    };
+    const alertObservedAt = (alert, requests) => {
+      const host = alert.host || '';
+      const related = (requests || [])
+        .filter(request => request.host === host)
+        .filter(request => {
+          if (alert.kind === 'slow_requests') return request.slow;
+          if (alert.kind === 'host_failures') return !request.success;
+          return !request.success || request.slow;
+        })
+        .sort((a, b) => new Date(b.started_at || 0) - new Date(a.started_at || 0));
+      if (related.length && related[0].started_at) {
+        return new Date(related[0].started_at).toLocaleTimeString();
+      }
+      return '聚合告警';
+    };
     const alertRows = alerts => {
       if (!alerts.length) {
         return '<span class="alert-chip">当前范围内暂无异常</span>';
@@ -1722,8 +1778,10 @@ DASHBOARD_HTML = """<!doctype html>
         <tr>
           <td>${escapeHtml(severityLabel(alert.severity))}</td>
           <td><strong>${escapeHtml(alertKindLabel(alert.kind))}</strong></td>
+          <td><strong>${escapeHtml(alert.host || '-')}</strong></td>
           <td>${escapeHtml(alertDetailText(alert))}</td>
-          <td>-</td>
+          <td class="advice-text">${escapeHtml(alertAdviceText(alert))}</td>
+          <td>${escapeHtml(alertObservedAt(alert, requests))}</td>
         </tr>
       `);
       const requestRows = requestAnomalies.map(request => {
@@ -1731,9 +1789,11 @@ DASHBOARD_HTML = """<!doctype html>
         const when = request.started_at ? new Date(request.started_at).toLocaleTimeString() : '-';
         return `
           <tr>
+            <td>${request.success ? '提醒' : '严重'}</td>
             <td>${escapeHtml(kind)}</td>
             <td><strong>${escapeHtml(request.host || '-')}</strong></td>
             <td>${escapeHtml(request.error || routeText(request.route || '-'))}</td>
+            <td class="advice-text">${escapeHtml(requestAdviceText(request))}</td>
             <td>${escapeHtml(when)}</td>
           </tr>
         `;
@@ -1744,7 +1804,7 @@ DASHBOARD_HTML = """<!doctype html>
       }
       return `
         <table class="data-table">
-          <thead><tr><th>类型</th><th>对象</th><th>说明</th><th>时间</th></tr></thead>
+          <thead><tr><th>级别</th><th>类型</th><th>对象</th><th>说明</th><th>建议</th><th>时间</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       `;
