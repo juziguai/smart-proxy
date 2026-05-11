@@ -799,6 +799,7 @@ DASHBOARD_HTML = """<!doctype html>
       background: #fff1dc;
       color: #c46206;
       font-size: 12px;
+      line-height: 1.2;
       padding: 7px 12px;
     }
     .health-banner .alert-chip.alert-overflow {
@@ -1406,6 +1407,10 @@ DASHBOARD_HTML = """<!doctype html>
       if (cost.billing_type === 'unknown') return '未计价';
       return money(cost.total);
     };
+    const modelDisplayName = model => {
+      if (model === '<synthetic>') return '未识别模型';
+      return model || '未知模型';
+    };
     const modelRows = models => {
       const entries = Object.entries(models)
         .sort((a, b) => b[1].total_tokens - a[1].total_tokens);
@@ -1414,7 +1419,7 @@ DASHBOARD_HTML = """<!doctype html>
       }
       return entries.map(([model, usage]) => `
         <div class="model-row">
-          <span class="model-name">${escapeHtml(model)}</span>
+          <span class="model-name" title="${escapeHtml(model)}">${escapeHtml(modelDisplayName(model))}</span>
           <strong class="model-total">${fmt.format(usage.total_tokens)} · ${costLabel(usage.cost)}</strong>
           <div class="model-metrics">
             <span class="metric">输入 <strong>${fmt.format(usage.input_tokens)}</strong></span>
@@ -1430,13 +1435,51 @@ DASHBOARD_HTML = """<!doctype html>
       direct: '直连',
       direct_whitelist: '白名单直连'
     })[route] || route;
+    const severityLabel = severity => ({
+      critical: '严重',
+      warning: '提醒',
+      info: '信息'
+    })[severity] || severity || '提醒';
+    const alertKindLabel = kind => ({
+      slow_requests: '慢建连',
+      host_failures: '失败率异常'
+    })[kind] || kind || '告警';
+    const providerLabelForHost = host => {
+      const value = String(host || '').toLowerCase();
+      if (value.includes('minimax')) return 'MiniMax';
+      if (value.includes('deepseek')) return 'DeepSeek';
+      if (value.includes('xiaomimimo') || value.includes('mimo')) return 'MiMo';
+      if (value.includes('github')) return 'GitHub';
+      if (value.includes('anthropic')) return 'Anthropic';
+      if (value.includes('douyin')) return 'Douyin';
+      return host || '未知 Host';
+    };
+    const alertSummaryLabel = alert => {
+      const label = providerLabelForHost(alert.host);
+      if (alert.kind === 'slow_requests') {
+        return `${label} 慢建连 ${fmt.format(alert.value || 0)} 次`;
+      }
+      if (alert.kind === 'host_failures') {
+        return `${label} 失败率 ${percent(alert.value || 0)}`;
+      }
+      return `${label} ${alert.kind || '异常'}`;
+    };
+    const alertDetailText = alert => {
+      if (alert.kind === 'slow_requests') {
+        return `${alert.host || '未知 Host'} 有 ${fmt.format(alert.value || 0)} 次建连超过 ${fmt.format(3000)}ms`;
+      }
+      if (alert.kind === 'host_failures') {
+        return `${alert.host || '未知 Host'} 失败率 ${percent(alert.value || 0)}`;
+      }
+      return alert.message || alert.kind || '异常';
+    };
     const alertRows = alerts => {
       if (!alerts.length) {
         return '<span class="alert-chip">当前范围内暂无异常</span>';
       }
       const visibleAlerts = alerts.slice(0, 2).map(alert => `
-        <span class="alert-chip ${escapeHtml(alert.severity || 'warning')}" title="${escapeHtml(alert.message || '')}">
-          ${escapeHtml(alert.message || alert.kind || '异常')}
+        <span class="alert-chip ${escapeHtml(alert.severity || 'warning')}" title="${escapeHtml(alertDetailText(alert))}">
+          ${escapeHtml(alertSummaryLabel(alert))}
         </span>
       `);
       if (alerts.length > 2) {
@@ -1460,7 +1503,7 @@ DASHBOARD_HTML = """<!doctype html>
           ? '系统需要关注'
           : '系统运行正常';
       const healthSub = alerts.length
-        ? alerts.slice(0, 2).map(alert => alert.message || alert.kind || '异常').join(' / ')
+        ? alerts.slice(0, 2).map(alert => alertSummaryLabel(alert)).join(' / ')
         : '代理、Dashboard 与上游连接均处于可用状态。';
       text('systemHealthText', healthText);
       text('systemHealthSub', healthSub);
@@ -1677,9 +1720,9 @@ DASHBOARD_HTML = """<!doctype html>
       const requestAnomalies = (requests || []).filter(request => !request.success || request.slow).slice(0, 5);
       const alertRows = (alerts || []).slice(0, 3).map(alert => `
         <tr>
-          <td>${escapeHtml(alert.severity || 'warning')}</td>
-          <td><strong>${escapeHtml(alert.kind || '告警')}</strong></td>
-          <td>${escapeHtml(alert.message || '-')}</td>
+          <td>${escapeHtml(severityLabel(alert.severity))}</td>
+          <td><strong>${escapeHtml(alertKindLabel(alert.kind))}</strong></td>
+          <td>${escapeHtml(alertDetailText(alert))}</td>
           <td>-</td>
         </tr>
       `);
@@ -1754,7 +1797,7 @@ DASHBOARD_HTML = """<!doctype html>
       const allActive = selectedModels.size === 0 ? ' active' : '';
       filter.innerHTML = `<button data-model="__all" class="${allActive}">全部模型</button>` + entries.map(([model]) => {
         const active = selectedModels.has(model) ? ' active' : '';
-        return `<button data-model="${escapeHtml(model)}" class="${active}" title="${escapeHtml(model)}">${escapeHtml(model)}</button>`;
+        return `<button data-model="${escapeHtml(model)}" class="${active}" title="${escapeHtml(model)}">${escapeHtml(modelDisplayName(model))}</button>`;
       }).join('');
       filter.querySelectorAll('[data-model]').forEach(button => {
         button.addEventListener('click', () => {
