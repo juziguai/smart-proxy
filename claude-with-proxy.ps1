@@ -169,7 +169,7 @@ $providers = @{
         Label = "MiniMax-M2.7-highspeed"
         BaseUrl = "https://api.minimaxi.com/anthropic"
         Model = "MiniMax-M2.7-highspeed"
-        EffortLevel = "xhigh"
+        EffortLevel = "max"
         TokenEnv = "MINIMAX_API_KEY"
     }
     "2" = @{
