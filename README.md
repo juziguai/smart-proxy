@@ -58,7 +58,9 @@ $SMART_PROXY_DIR     = "<smart-proxy项目目录>"
 .\claude.ps1
 ```
 
-脚本自动完成 sidecar 守护 + 代理注入 + 启动模式选择：
+脚本自动完成 sidecar 守护 + 代理注入 + 管理页打开 + 启动模式选择。
+当前个人启动脚本还会用 Google Chrome 打开 `http://127.0.0.1:8890` 和
+`http://127.0.0.1:39393/dashboard`；打开前会检测 Chrome 当前会话，已打开的页面不会重复打开。
 
 ```
 === 选择启动模式 ===
@@ -112,6 +114,8 @@ start "" "<项目路径>\start-proxy.vbs"
 │       ├─ 等待 dashboard API 返回 HTTP 200                              │
 │       ├─ 写入日志 logs/smart-proxy.out.log / smart-proxy.err.log       │
 │       ├─ 设置 HTTP_PROXY / HTTPS_PROXY = http://127.0.0.1:8889         │
+│       ├─ 确认 LocalMemory 管理页 127.0.0.1:39393/dashboard              │
+│       ├─ 检测 Google Chrome 已打开的管理页，缺哪个只打开哪个            │
 │       ├─ 显示版本、模型提供商、启动模式菜单                            │
 │       └─ 启动 Claude Code                                              │
 │                                                                       │
@@ -220,6 +224,22 @@ smart-proxy 会在同一个 Python 进程里同时启动两个本地服务：
 - 任意端口未运行：后台启动 `smart-proxy.py`
 - 启动后复查端口，确认代理和 dashboard 都可用
 - dashboard 可用时会打印 `http://127.0.0.1:8890`
+
+### 管理页面自动打开
+
+当前个人启动脚本会把两个本地管理页作为日常入口：
+
+| 页面 | 地址 | 用途 |
+|------|------|------|
+| smart-proxy dashboard | `http://127.0.0.1:8890` | 查看代理运行状态、请求统计、token 用量、费用估算、白名单和 Doctor 诊断 |
+| LocalMemory dashboard | `http://127.0.0.1:39393/dashboard` | 查看本地记忆服务的管理界面 |
+
+启动流程遵循“先检测，再补齐”的原则：
+
+- 如果 Google Chrome 里已经打开了某个管理页，脚本不会重复打开这个标签页
+- 如果只缺其中一个页面，脚本只打开缺失的那个页面
+- 如果两个页面都没打开，脚本会用 Google Chrome 一起打开两个页面
+- 检测 Chrome 标签页时读取 Chrome 用户数据里的 `Sessions` 文件，不需要开启远程调试端口
 
 统计面板包含：
 
