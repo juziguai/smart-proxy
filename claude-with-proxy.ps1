@@ -116,6 +116,91 @@ function Get-EnvValue {
     return $value
 }
 
+function Write-ProviderHealthStatus {
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Provider,
+        [Parameter(Mandatory = $true)]
+        [bool]$Ok,
+        [Parameter(Mandatory = $true)]
+        [string]$Status,
+        [Parameter(Mandatory = $true)]
+        [string]$Detail
+    )
+
+    $logDir = Join-Path $SMART_PROXY_DIR "logs"
+    New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+    $healthPath = Join-Path $logDir "provider-health.json"
+    $payload = [ordered]@{
+        checked_at = (Get-Date).ToUniversalTime().ToString("o")
+        label = $Provider.Label
+        base_url = $Provider.BaseUrl
+        model = $Provider.Model
+        ok = $Ok
+        status = $Status
+        detail = $Detail
+    }
+    $payload | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $healthPath -Encoding UTF8
+}
+
+function Test-ModelProviderHealth {
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Provider,
+        [Parameter(Mandatory = $true)]
+        [string]$Token
+    )
+
+    $endpoint = "$($Provider.BaseUrl.TrimEnd('/'))/v1/messages"
+    $body = @{
+        model = $Provider.Model
+        max_tokens = 1
+        messages = @(@{ role = "user"; content = "ping" })
+    } | ConvertTo-Json -Depth 5 -Compress
+    $headers = @{
+        "x-api-key" = $Token
+        "Authorization" = "Bearer $Token"
+        "anthropic-version" = "2023-06-01"
+        "content-type" = "application/json"
+    }
+
+    try {
+        $response = Invoke-WebRequest -UseBasicParsing -Method Post -Uri $endpoint -Headers $headers -Body $body -TimeoutSec 20
+        Write-ProviderHealthStatus -Provider $Provider -Ok $true -Status "ok" -Detail "HTTP $($response.StatusCode)"
+        Write-Host "[model-check] $($Provider.Label): OK" -ForegroundColor Green
+        return $true
+    }
+    catch {
+        $statusCode = $null
+        if ($_.Exception.Response -and $_.Exception.Response.StatusCode) {
+            $statusCode = [int]$_.Exception.Response.StatusCode
+        }
+        $detail = if ($_.ErrorDetails.Message) { $_.ErrorDetails.Message } else { $_.Exception.Message }
+        $lowerDetail = $detail.ToLowerInvariant()
+        $status = "check_failed"
+        if (($statusCode -eq 429) -or $lowerDetail.Contains("quota exhausted") -or $lowerDetail.Contains("insufficient") -or $lowerDetail.Contains("expired")) {
+            $status = "quota_exhausted"
+        }
+        elseif (($statusCode -eq 401) -or ($statusCode -eq 403)) {
+            $status = "auth_error"
+        }
+
+        Write-ProviderHealthStatus -Provider $Provider -Ok $false -Status $status -Detail "HTTP $statusCode $detail"
+        if ($status -eq "quota_exhausted") {
+            Write-Host "[model-check] $($Provider.Label): 额度/套餐不可用，检测到 quota exhausted 或 HTTP 429。" -ForegroundColor Red
+            Write-Host "[model-check] 请续费/换模型后重新运行 claude.ps1。" -ForegroundColor Yellow
+            return $false
+        }
+        if ($status -eq "auth_error") {
+            Write-Host "[model-check] $($Provider.Label): 鉴权失败，检查 API Key。" -ForegroundColor Red
+            return $false
+        }
+
+        Write-Host "[model-check] $($Provider.Label): 健康检查未通过，继续启动；详情已写入 dashboard Doctor。" -ForegroundColor Yellow
+        return $true
+    }
+}
+
 function Set-ModelProvider {
     param(
         [Parameter(Mandatory = $true)]
@@ -161,6 +246,9 @@ function Set-ModelProvider {
     Write-Host "[model] $($Provider.Label)" -ForegroundColor Green
     Write-Host "[base]  $($Provider.BaseUrl)" -ForegroundColor DarkGray
     Write-Host "[key]   ${tokenName}: set" -ForegroundColor DarkGray
+    if (-not (Test-ModelProviderHealth -Provider $Provider -Token $token)) {
+        exit 1
+    }
     Write-Host ""
 }
 
@@ -201,14 +289,14 @@ $providers = @{
         BaseUrl = "https://token-plan-cn.xiaomimimo.com/anthropic"
         Model = "mimo-v2.5-pro"
         EffortLevel = "xhigh"
-        TokenEnv = @("MIMO_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+        TokenEnv = @("MIMO_API_KEY", "MIMO_ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN")
     }
     "5" = @{
         Label = "MiMo-V2.5"
         BaseUrl = "https://token-plan-cn.xiaomimimo.com/anthropic"
         Model = "mimo-v2.5"
         EffortLevel = "xhigh"
-        TokenEnv = @("MIMO_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+        TokenEnv = @("MIMO_API_KEY", "MIMO_ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN")
     }
 }
 

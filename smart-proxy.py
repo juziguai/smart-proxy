@@ -3,6 +3,7 @@ import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import fnmatch
+import json
 import os
 from pathlib import Path
 import socket
@@ -23,6 +24,7 @@ LISTEN_HOST = "127.0.0.1"
 LISTEN_PORT = 8889
 CACHE_SEC = 3
 READ_SIZE = 65536
+PROVIDER_HEALTH_PATH = Path(__file__).with_name("logs") / "provider-health.json"
 
 
 @dataclass(frozen=True)
@@ -218,6 +220,48 @@ def _doctor_item(key, label, ok, detail, fix=""):
     }
 
 
+def build_provider_health_doctor_item(path=PROVIDER_HEALTH_PATH):
+    path = Path(path)
+    if not path.exists():
+        return _doctor_item(
+            "provider_health",
+            "Provider quota / health",
+            True,
+            "No provider health check has been recorded yet.",
+            "Run claude.ps1 once so the launcher can probe the selected provider.",
+        )
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return _doctor_item(
+            "provider_health",
+            "Provider quota / health",
+            False,
+            f"Could not read provider health file: {exc}",
+            "Delete logs/provider-health.json and run claude.ps1 again.",
+        )
+
+    label = payload.get("label") or "selected provider"
+    status = payload.get("status") or "unknown"
+    detail = payload.get("detail") or status
+    checked_at = payload.get("checked_at")
+    suffix = f" ({checked_at})" if checked_at else ""
+    ok = bool(payload.get("ok"))
+    fix = (
+        ""
+        if ok
+        else "If this says quota exhausted or HTTP 429, renew the provider plan or switch models in claude.ps1."
+    )
+    return _doctor_item(
+        "provider_health",
+        "Provider quota / health",
+        ok,
+        f"{label}: {detail}{suffix}",
+        fix,
+    )
+
+
 def build_doctor_report():
     upstream = proxy_cache.get()
     whitelist.refresh_if_needed()
@@ -297,6 +341,7 @@ def build_doctor_report():
             "检查 Windows 系统代理设置或上游代理进程。",
         ),
     ]
+    checks.append(build_provider_health_doctor_item())
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "checks": checks,

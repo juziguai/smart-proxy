@@ -1,10 +1,18 @@
 import json
+import os
+import importlib.util
+from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 from urllib.parse import urlparse
 
 from stats_server import build_stats_response, handle_stats_request
 from stats_store import ProxyRequestEvent, StatsStore
+
+SMART_PROXY_PATH = Path(__file__).resolve().parents[1] / "smart-proxy.py"
+SMART_PROXY_SPEC = importlib.util.spec_from_file_location("smart_proxy", SMART_PROXY_PATH)
+smart_proxy = importlib.util.module_from_spec(SMART_PROXY_SPEC)
+SMART_PROXY_SPEC.loader.exec_module(smart_proxy)
 
 
 class StatsServerTests(unittest.TestCase):
@@ -213,6 +221,26 @@ class StatsServerTests(unittest.TestCase):
         payload = json.loads(body.decode("utf-8"))
         self.assertEqual(status, 200)
         self.assertEqual(payload["checks"][0]["key"], "python")
+
+    def test_provider_health_file_adds_doctor_warning(self):
+        with TemporaryDirectory() as temp_dir:
+            health_path = os.path.join(temp_dir, "provider-health.json")
+            with open(health_path, "w", encoding="utf-8") as file:
+                json.dump(
+                    {
+                        "label": "MiMo-V2.5-Pro",
+                        "ok": False,
+                        "status": "quota_exhausted",
+                        "detail": "Request rejected (429) · quota exhausted",
+                    },
+                    file,
+                )
+
+            check = smart_proxy.build_provider_health_doctor_item(health_path)
+
+        self.assertEqual(check["key"], "provider_health")
+        self.assertEqual(check["status"], "warning")
+        self.assertIn("MiMo-V2.5-Pro", check["detail"])
 
     def test_unknown_endpoint_returns_404_json(self):
         with TemporaryDirectory() as temp_dir:

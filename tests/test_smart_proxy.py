@@ -340,6 +340,16 @@ class LauncherProfileTests(unittest.TestCase):
         self.assertIn('Test-LocalPort "8890"', launcher)
         self.assertIn("http://127.0.0.1:8890", launcher)
 
+    def test_launcher_probes_selected_provider_before_start(self):
+        launcher = (MODULE_PATH.parent / "claude-with-proxy.ps1").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("Test-ModelProviderHealth", launcher)
+        self.assertIn("provider-health.json", launcher)
+        self.assertIn("/v1/messages", launcher)
+        self.assertIn("quota exhausted", launcher)
+
 
 if __name__ == "__main__":
     unittest.main()
