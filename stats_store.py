@@ -280,11 +280,16 @@ class StatsStore:
         }
 
     def upsert_usage_event(self, event):
+        self.upsert_usage_events([event])
+
+    def upsert_usage_events(self, events):
+        if not events:
+            return
         with self._connection() as conn:
             with conn:
-                conn.execute(
+                conn.executemany(
                     """
-                    INSERT OR REPLACE INTO usage_events (
+                    INSERT INTO usage_events (
                         source_file,
                         source_line,
                         timestamp,
@@ -300,8 +305,23 @@ class StatsStore:
                         speed
                     )
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(source_file, source_line) DO UPDATE SET
+                        timestamp = excluded.timestamp,
+                        session_id = excluded.session_id,
+                        model = excluded.model,
+                        input_tokens = excluded.input_tokens,
+                        output_tokens = excluded.output_tokens,
+                        cache_read_input_tokens =
+                            excluded.cache_read_input_tokens,
+                        cache_creation_input_tokens =
+                            excluded.cache_creation_input_tokens,
+                        web_search_requests = excluded.web_search_requests,
+                        web_fetch_requests = excluded.web_fetch_requests,
+                        service_tier = excluded.service_tier,
+                        speed = excluded.speed
                     """,
-                    (
+                    [
+                        (
                         event.source_file,
                         event.source_line,
                         event.timestamp,
@@ -315,7 +335,9 @@ class StatsStore:
                         event.web_fetch_requests,
                         event.service_tier,
                         event.speed,
-                    ),
+                        )
+                        for event in events
+                    ],
                 )
 
     def _get_proxy_summary(self, since, until=None):

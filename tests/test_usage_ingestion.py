@@ -10,6 +10,25 @@ from usage_ingestion import ingest_usage_events
 
 
 class UsageIngestionTests(unittest.TestCase):
+    def test_ingestion_uses_batch_upsert(self):
+        class FakeReader:
+            def read_usage_events(self):
+                return ["event-a", "event-b"]
+
+        class FakeStore:
+            def __init__(self):
+                self.batches = []
+
+            def upsert_usage_events(self, events):
+                self.batches.append(events)
+
+        store = FakeStore()
+
+        count = ingest_usage_events(FakeReader(), store)
+
+        self.assertEqual(count, 2)
+        self.assertEqual(store.batches, [["event-a", "event-b"]])
+
     def test_ingests_usage_events_idempotently(self):
         with TemporaryDirectory() as temp_dir:
             store = StatsStore(f"{temp_dir}/stats.db")

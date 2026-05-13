@@ -5,8 +5,7 @@ from claude_usage_reader import ClaudeUsageReader
 
 def ingest_usage_events(reader, stats_store):
     events = reader.read_usage_events()
-    for event in events:
-        stats_store.upsert_usage_event(event)
+    stats_store.upsert_usage_events(events)
     return len(events)
 
 

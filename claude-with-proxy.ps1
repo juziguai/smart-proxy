@@ -57,6 +57,37 @@ function Wait-StatsDashboard {
     return $false
 }
 
+function Open-ManagementPagesInChrome {
+    $urls = @(
+        "http://127.0.0.1:8890"
+        "http://127.0.0.1:39393/dashboard"
+    )
+
+    $chromeCmd = Get-Command chrome.exe -ErrorAction SilentlyContinue
+    $chromeCandidates = @(
+        if ($chromeCmd) { $chromeCmd.Source }
+        "$env:ProgramFiles\Google\Chrome\Application\chrome.exe"
+        "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe"
+        "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe"
+    )
+    $chromePath = $chromeCandidates | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
+
+    if (-not $chromePath) {
+        Write-Host "[browser] 未找到 Google Chrome，跳过自动打开管理页面。" -ForegroundColor Yellow
+        return $false
+    }
+
+    try {
+        Start-Process -FilePath $chromePath -ArgumentList $urls
+        Write-Host "[browser] 已用 Google Chrome 打开管理页面。" -ForegroundColor Green
+        return $true
+    }
+    catch {
+        Write-Host "[browser] 打开 Google Chrome 失败: $($_.Exception.Message)" -ForegroundColor Yellow
+        return $false
+    }
+}
+
 # 检查 sidecar / dashboard 是否已在运行，没有则自动拉起
 $proxyReady = Test-LocalPort "8889"
 $dashboardReady = (Test-LocalPort "8890") -and (Wait-StatsDashboard -TimeoutSeconds 1 -RequestTimeoutSeconds 1)
@@ -98,6 +129,7 @@ $env:HTTP_PROXY  = "http://127.0.0.1:8889"
 $env:HTTPS_PROXY = "http://127.0.0.1:8889"
 Write-Host "[proxy] -> 127.0.0.1:8889 (auto-detect)" -ForegroundColor Green
 Write-Host "[stats] -> http://127.0.0.1:8890" -ForegroundColor Green
+Open-ManagementPagesInChrome | Out-Null
 Write-Host ""
 
 function Get-EnvValue {

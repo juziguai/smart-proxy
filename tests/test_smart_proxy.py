@@ -350,6 +350,17 @@ class LauncherProfileTests(unittest.TestCase):
         self.assertIn("/v1/messages", launcher)
         self.assertIn("quota exhausted", launcher)
 
+    def test_launcher_does_not_use_chrome_session_files_for_page_detection(self):
+        launcher = (MODULE_PATH.parent / "claude-with-proxy.ps1").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("Open-ManagementPagesInChrome", launcher)
+        self.assertIn("http://127.0.0.1:8890", launcher)
+        self.assertIn("http://127.0.0.1:39393/dashboard", launcher)
+        self.assertNotIn("Test-ChromePageOpen", launcher)
+        self.assertNotIn("Sessions", launcher)
+
 
 if __name__ == "__main__":
     unittest.main()
