@@ -29,9 +29,10 @@ class FakeReader:
 
 
 class FakeWriter:
-    def __init__(self):
+    def __init__(self, peername=("127.0.0.1", 50123)):
         self.data = bytearray()
         self.closed = False
+        self.peername = peername
 
     def write(self, data):
         self.data.extend(data)
@@ -41,6 +42,11 @@ class FakeWriter:
 
     def close(self):
         self.closed = True
+
+    def get_extra_info(self, name, default=None):
+        if name == "peername":
+            return self.peername
+        return default
 
 
 class FakeProxyCache:
@@ -222,6 +228,52 @@ class ProxyTelemetryTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(event.success)
         self.assertEqual(event.error, "boom")
         self.assertGreaterEqual(event.latency_ms, 0)
+
+    async def test_handle_records_client_connection_closed_before_request(self):
+        stats_store = FakeStatsStore()
+        client_reader = FakeReader(lines=[b""])
+        client_writer = FakeWriter(peername=("127.0.0.1", 50999))
+
+        original_stats_store = smart_proxy.stats_store
+        try:
+            smart_proxy.stats_store = stats_store
+
+            await smart_proxy.handle(client_reader, client_writer)
+        finally:
+            smart_proxy.stats_store = original_stats_store
+
+        self.assertEqual(len(stats_store.events), 1)
+        event = stats_store.events[0]
+        self.assertEqual(event.method, "UNKNOWN")
+        self.assertEqual(event.host, "(unknown)")
+        self.assertEqual(event.route, "unparsed")
+        self.assertEqual(event.stage, "client_closed")
+        self.assertFalse(event.success)
+        self.assertEqual(event.client_addr, "127.0.0.1")
+        self.assertEqual(event.client_port, 50999)
+        self.assertIn("request line", event.error)
+
+    async def test_handle_records_malformed_request_line(self):
+        stats_store = FakeStatsStore()
+        client_reader = FakeReader(lines=[b"GARBAGE\r\n"])
+        client_writer = FakeWriter(peername=("127.0.0.1", 51000))
+
+        original_stats_store = smart_proxy.stats_store
+        try:
+            smart_proxy.stats_store = stats_store
+
+            await smart_proxy.handle(client_reader, client_writer)
+        finally:
+            smart_proxy.stats_store = original_stats_store
+
+        self.assertEqual(len(stats_store.events), 1)
+        event = stats_store.events[0]
+        self.assertEqual(event.method, "GARBAGE")
+        self.assertEqual(event.host, "(unknown)")
+        self.assertEqual(event.route, "unparsed")
+        self.assertEqual(event.stage, "parse_failed")
+        self.assertFalse(event.success)
+        self.assertEqual(event.client_port, 51000)
 
 
 class RuntimeStatusTests(unittest.TestCase):

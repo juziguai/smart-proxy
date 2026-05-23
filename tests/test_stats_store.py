@@ -260,6 +260,41 @@ class StatsStoreTests(unittest.TestCase):
         self.assertEqual(recent["connect_latency_ms"], 200)
         self.assertEqual(recent["duration_ms"], 600_000)
 
+    def test_recent_proxy_requests_include_connection_audit_fields(self):
+        tmp_path = self.enterContext(TemporaryDirectoryPath())
+        store = StatsStore(tmp_path / "stats.db")
+
+        store.record_proxy_request(
+            ProxyRequestEvent(
+                started_at=iso_at(1),
+                completed_at=iso_at(1),
+                method="CONNECT",
+                host="api.example.com",
+                route="proxy",
+                success=True,
+                latency_ms=250,
+                error=None,
+                connect_latency_ms=25,
+                duration_ms=250,
+                stage="tunnel_closed",
+                client_addr="127.0.0.1",
+                client_port=50123,
+                target_port=443,
+                upstream_host="127.0.0.1",
+                upstream_port=10808,
+            )
+        )
+
+        recent = store.get_recent_proxy_requests(limit=1)[0]
+
+        self.assertEqual(recent["stage"], "tunnel_closed")
+        self.assertEqual(recent["client_addr"], "127.0.0.1")
+        self.assertEqual(recent["client_port"], 50123)
+        self.assertEqual(recent["target_port"], 443)
+        self.assertEqual(recent["upstream_host"], "127.0.0.1")
+        self.assertEqual(recent["upstream_port"], 10808)
+        self.assertEqual(recent["duration_ms"], 250)
+
     def test_connect_latency_marks_slow_request(self):
         tmp_path = self.enterContext(TemporaryDirectoryPath())
         store = StatsStore(tmp_path / "stats.db")

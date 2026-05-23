@@ -25,6 +25,8 @@ LISTEN_PORT = 8889
 CACHE_SEC = 3
 READ_SIZE = 65536
 PROVIDER_HEALTH_PATH = Path(__file__).with_name("logs") / "provider-health.json"
+UNKNOWN_HOST = "(unknown)"
+UNPARSED_ROUTE = "unparsed"
 
 
 @dataclass(frozen=True)
@@ -379,6 +381,26 @@ def extract_host(target, headers_data):
     return host
 
 
+def extract_target_port(method, target):
+    if method == "CONNECT":
+        _host, _sep, port = target.rpartition(":")
+        try:
+            return int(port)
+        except (TypeError, ValueError):
+            return None
+    return 80
+
+
+def get_client_peer(writer):
+    try:
+        peer = writer.get_extra_info("peername")
+    except Exception:
+        return "", None
+    if isinstance(peer, tuple) and len(peer) >= 2:
+        return str(peer[0]), int(peer[1])
+    return "", None
+
+
 def log(msg):
     ts = time.strftime("%H:%M:%S")
     print(f"[sp {ts}] {msg}", flush=True)
@@ -596,6 +618,12 @@ def record_proxy_stats(
     error,
     connect_latency_ms=None,
     duration_ms=None,
+    stage="completed",
+    client_addr="",
+    client_port=None,
+    target_port=None,
+    upstream_host="",
+    upstream_port=None,
 ):
     if stats_store is None:
         return
@@ -612,6 +640,12 @@ def record_proxy_stats(
                 error=error,
                 connect_latency_ms=connect_latency_ms,
                 duration_ms=duration_ms,
+                stage=stage,
+                client_addr=client_addr,
+                client_port=client_port,
+                target_port=target_port,
+                upstream_host=upstream_host,
+                upstream_port=upstream_port,
             )
         )
     except Exception as exc:
@@ -641,7 +675,10 @@ async def _read_body(reader, request_bytes):
 async def handle(client_r, client_w):
     started_at = utc_now_iso()
     start_monotonic = time.monotonic()
+    client_addr, client_port = get_client_peer(client_w)
     upstream = proxy_cache.get()
+    upstream_host = upstream[0] if upstream else ""
+    upstream_port = upstream[1] if upstream else None
     method = "?"
     target = "?"
     host = ""
@@ -649,19 +686,73 @@ async def handle(client_r, client_w):
     success = False
     error = None
     connect_latency_ms = None
+    target_port = None
     try:
         first_line = await asyncio.wait_for(client_r.readline(), timeout=10)
     except asyncio.TimeoutError:
+        duration_ms = elapsed_ms(start_monotonic)
+        record_proxy_stats(
+            started_at,
+            "UNKNOWN",
+            UNKNOWN_HOST,
+            UNPARSED_ROUTE,
+            False,
+            duration_ms,
+            "timed out waiting for request line",
+            duration_ms=duration_ms,
+            stage="read_timeout",
+            client_addr=client_addr,
+            client_port=client_port,
+            upstream_host=upstream_host,
+            upstream_port=upstream_port,
+        )
         client_w.close()
         return
 
     if not first_line:
+        duration_ms = elapsed_ms(start_monotonic)
+        record_proxy_stats(
+            started_at,
+            "UNKNOWN",
+            UNKNOWN_HOST,
+            UNPARSED_ROUTE,
+            False,
+            duration_ms,
+            "client closed before request line",
+            duration_ms=duration_ms,
+            stage="client_closed",
+            client_addr=client_addr,
+            client_port=client_port,
+            upstream_host=upstream_host,
+            upstream_port=upstream_port,
+        )
         client_w.close()
         return
 
     parts = first_line.decode("latin-1", errors="replace").rstrip("\r\n").split(" ")
     method = parts[0] if parts else "?"
     target = parts[1] if len(parts) > 1 else "?"
+    if len(parts) < 2 or not method or not target or target == "?":
+        duration_ms = elapsed_ms(start_monotonic)
+        record_proxy_stats(
+            started_at,
+            method or "UNKNOWN",
+            UNKNOWN_HOST,
+            UNPARSED_ROUTE,
+            False,
+            duration_ms,
+            "malformed request line",
+            duration_ms=duration_ms,
+            stage="parse_failed",
+            client_addr=client_addr,
+            client_port=client_port,
+            upstream_host=upstream_host,
+            upstream_port=upstream_port,
+        )
+        safe_write(client_w, b"HTTP/1.1 400 Bad Request\r\n\r\n")
+        client_w.close()
+        return
+    target_port = extract_target_port(method, target)
 
     # extract host and check whitelist
     host = extract_host(target, first_line)
@@ -708,13 +799,19 @@ async def handle(client_r, client_w):
         record_proxy_stats(
             started_at,
             method,
-            host or target[:80],
+            host or target[:80] or UNKNOWN_HOST,
             route,
             success,
             duration_ms,
             error,
             connect_latency_ms=connect_latency_ms,
             duration_ms=duration_ms,
+            stage="tunnel_closed" if success else "forward_failed",
+            client_addr=client_addr,
+            client_port=client_port,
+            target_port=target_port,
+            upstream_host=upstream_host,
+            upstream_port=upstream_port,
         )
         try:
             client_w.close()

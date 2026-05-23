@@ -41,6 +41,12 @@ class ProxyRequestEvent:
     error: str | None
     connect_latency_ms: int | None = None
     duration_ms: int | None = None
+    stage: str = "completed"
+    client_addr: str = ""
+    client_port: int | None = None
+    target_port: int | None = None
+    upstream_host: str = ""
+    upstream_port: int | None = None
 
 
 class StatsStore:
@@ -73,9 +79,15 @@ class StatsStore:
                         latency_ms,
                         connect_latency_ms,
                         duration_ms,
+                        stage,
+                        client_addr,
+                        client_port,
+                        target_port,
+                        upstream_host,
+                        upstream_port,
                         error
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         event.started_at,
@@ -87,6 +99,12 @@ class StatsStore:
                         event.latency_ms,
                         connect_latency_ms,
                         duration_ms,
+                        event.stage,
+                        event.client_addr,
+                        event.client_port,
+                        event.target_port,
+                        event.upstream_host,
+                        event.upstream_port,
                         event.error,
                     ),
                 )
@@ -120,6 +138,12 @@ class StatsStore:
                     latency_ms,
                     connect_latency_ms,
                     duration_ms,
+                    stage,
+                    client_addr,
+                    client_port,
+                    target_port,
+                    upstream_host,
+                    upstream_port,
                     error
                 FROM proxy_requests
                 {where}
@@ -144,6 +168,24 @@ class StatsStore:
                     else None
                 ),
                 "duration_ms": int(row["duration_ms"]),
+                "stage": row["stage"] or "completed",
+                "client_addr": row["client_addr"] or "",
+                "client_port": (
+                    int(row["client_port"])
+                    if row["client_port"] is not None
+                    else None
+                ),
+                "target_port": (
+                    int(row["target_port"])
+                    if row["target_port"] is not None
+                    else None
+                ),
+                "upstream_host": row["upstream_host"] or "",
+                "upstream_port": (
+                    int(row["upstream_port"])
+                    if row["upstream_port"] is not None
+                    else None
+                ),
                 "slow": (
                     row["connect_latency_ms"] is not None
                     and int(row["connect_latency_ms"]) >= SLOW_REQUEST_THRESHOLD_MS
@@ -790,6 +832,12 @@ class StatsStore:
                         latency_ms INTEGER NOT NULL,
                         connect_latency_ms INTEGER,
                         duration_ms INTEGER,
+                        stage TEXT NOT NULL DEFAULT 'completed',
+                        client_addr TEXT,
+                        client_port INTEGER,
+                        target_port INTEGER,
+                        upstream_host TEXT,
+                        upstream_port INTEGER,
                         error TEXT
                     )
                     """
@@ -844,6 +892,20 @@ class StatsStore:
                 WHERE duration_ms IS NULL
                 """
             )
+        if "stage" not in columns:
+            conn.execute(
+                "ALTER TABLE proxy_requests ADD COLUMN stage TEXT NOT NULL DEFAULT 'completed'"
+            )
+        if "client_addr" not in columns:
+            conn.execute("ALTER TABLE proxy_requests ADD COLUMN client_addr TEXT")
+        if "client_port" not in columns:
+            conn.execute("ALTER TABLE proxy_requests ADD COLUMN client_port INTEGER")
+        if "target_port" not in columns:
+            conn.execute("ALTER TABLE proxy_requests ADD COLUMN target_port INTEGER")
+        if "upstream_host" not in columns:
+            conn.execute("ALTER TABLE proxy_requests ADD COLUMN upstream_host TEXT")
+        if "upstream_port" not in columns:
+            conn.execute("ALTER TABLE proxy_requests ADD COLUMN upstream_port INTEGER")
 
     def _connect_latency_expr(self):
         return (
