@@ -15,6 +15,7 @@ import time
 import winreg
 
 from claude_usage_reader import ClaudeUsageReader
+from smart_proxy_config import DEFAULT_CONFIG
 from stats_store import ProxyRequestEvent, StatsStore
 from stats_server import (
     DASHBOARD_HOST,
@@ -23,11 +24,11 @@ from stats_server import (
 )
 from usage_ingestion import run_usage_ingestion_loop
 
-LISTEN_HOST = "127.0.0.1"
-LISTEN_PORT = 8889
-CACHE_SEC = 3
-READ_SIZE = 65536
-PROVIDER_HEALTH_PATH = Path(__file__).with_name("logs") / "provider-health.json"
+LISTEN_HOST = DEFAULT_CONFIG.listen_host
+LISTEN_PORT = DEFAULT_CONFIG.listen_port
+CACHE_SEC = DEFAULT_CONFIG.cache_sec
+READ_SIZE = DEFAULT_CONFIG.read_size
+PROVIDER_HEALTH_PATH = DEFAULT_CONFIG.provider_health_path
 UNKNOWN_HOST = "(unknown)"
 UNPARSED_ROUTE = "unparsed"
 PROCESS_INFO_CACHE_SEC = 60
@@ -91,18 +92,15 @@ proxy_cache = Cache(CACHE_SEC)
 
 # ── whitelist ────────────────────────────────────────────────────────
 
-WHITELIST_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "whitelist.txt")
-WHITELIST_RELOAD_SEC = 60
-STATS_DB_FILE = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)),
-    "smart-proxy-stats.db",
-)
+WHITELIST_FILE = DEFAULT_CONFIG.whitelist_file
+WHITELIST_RELOAD_SEC = DEFAULT_CONFIG.whitelist_reload_sec
+STATS_DB_FILE = DEFAULT_CONFIG.stats_db_file
 stats_store = None
 
 
 class Whitelist:
     def __init__(self, path, reload_interval):
-        self._path = path
+        self._path = os.fspath(path)
         self._interval = reload_interval
         self._expires = 0
         self._patterns = set()

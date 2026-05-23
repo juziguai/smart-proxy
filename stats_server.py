@@ -2,9 +2,11 @@ import asyncio
 import json
 from urllib.parse import parse_qs, urlparse
 
+from smart_proxy_config import DEFAULT_CONFIG
 
-DASHBOARD_HOST = "127.0.0.1"
-DASHBOARD_PORT = 8890
+
+DASHBOARD_HOST = DEFAULT_CONFIG.dashboard_host
+DASHBOARD_PORT = DEFAULT_CONFIG.dashboard_port
 
 
 def build_stats_response(status, payload):
