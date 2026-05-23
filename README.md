@@ -69,7 +69,7 @@ $env:HTTPS_PROXY = "http://127.0.0.1:8889"
 
 ## 白名单
 
-`whitelist.txt` 是本地私有配置，不提交到 GitHub。
+`whitelist.txt` 是本地白名单配置文件。
 
 示例：
 
@@ -140,23 +140,6 @@ smart-proxy/
 ├── stats_store.py                     # 兼容旧导入名
 └── usage_ingestion.py                 # 兼容旧导入名
 ```
-
-## 不提交到 GitHub 的内容
-
-以下内容默认只留在本地：
-
-```text
-docs/                         # 本地设计、调研、进度文档
-tests/                        # 本地测试文件
-logs/                         # 运行日志、截图、诊断输出
-data/                         # 运行时数据
-diagnostics/                  # 诊断产物
-smart-proxy-stats.db*         # 本地 SQLite 统计库
-whitelist.txt                 # 本地白名单配置
-antigravity-tls-relay.py      # 本机 Antigravity 专用辅助脚本
-```
-
-任何包含本机路径、用户名、Token、Cookie、API key、会话、日志、截图或数据库的内容都不要提交。
 
 ## 故障排查
 
