@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Smart Proxy Stats</title>
+  <link rel="stylesheet" href="/assets/dashboard.css">
+</head>
+<body>
+  <main>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">⬢</span>
+        <span>智能代理控制台</span>
+      </div>
+      <div class="shell-status" aria-label="service status">
+        <span class="status-chip good" id="proxyChip">代理 127.0.0.1:8889</span>
+        <span class="status-chip good" id="dashboardChip">管理端 127.0.0.1:8890</span>
+        <span class="status-chip" id="upstreamChip" hidden>Upstream detecting</span>
+      </div>
+      <div class="top-actions">
+        <span class="refresh-dot" aria-hidden="true">⟳</span>
+        <span id="lastRefreshAt">刚刚刷新</span>
+        <select class="auto-select" id="autoRefresh" aria-label="自动刷新">
+          <option value="5000">5 秒</option>
+          <option value="10000">10 秒</option>
+          <option value="30000">30 秒</option>
+          <option value="0">关闭</option>
+        </select>
+        <button class="theme-toggle" id="themeToggle" type="button" aria-label="切换主题">◐</button>
+      </div>
+    </header>
+
+    <nav class="tab-nav" aria-label="dashboard sections">
+      <button class="tab-button active" data-tab-target="overview">总览</button>
+      <button class="tab-button" data-tab-target="providers">服务商</button>
+      <button class="tab-button" data-tab-target="requests">请求</button>
+      <button class="tab-button" data-tab-target="usage">用量与成本</button>
+      <button class="tab-button" data-tab-target="whitelist">白名单</button>
+      <button class="tab-button" data-tab-target="doctor">诊断</button>
+    </nav>
+
+    <div class="console-content">
+    <section class="tab-panel active" data-tab-panel="overview">
+      <div class="layout-root" id="layoutRoot">
+        <section class="health-banner" id="alertsPanel" data-widget="alerts" aria-live="polite">
+          <button class="drag-handle" type="button" aria-label="拖动系统健康">拖动</button>
+          <div class="health-banner-main">
+            <span class="health-dot" aria-hidden="true">✓</span>
+            <div>
+              <div class="health-title" id="systemHealthText">系统运行正常</div>
+              <div class="health-subtitle" id="systemHealthSub">代理、Dashboard 与上游连接均处于可用状态。</div>
+            </div>
+          </div>
+          <button class="health-link" type="button" data-tab-target="doctor">查看详情</button>
+          <div class="alert-list" id="alertsList" hidden></div>
+          <div class="alert-count" id="alertCount" hidden>0 条</div>
+        </section>
+
+        <section class="grid layout-widget" data-widget="kpis">
+          <button class="drag-handle" type="button" aria-label="拖动指标卡片">拖动</button>
+          <article class="card metric-card" style="--accent: var(--blue)">
+            <div class="metric-icon" aria-hidden="true">↗</div>
+            <div>
+              <div class="label">总请求数</div>
+              <div class="value" id="totalRequests">0</div>
+              <div class="sub" id="requestSub">等待对比 · 成功 0 / 失败 0</div>
+            </div>
+          </article>
+          <article class="card metric-card" style="--accent: var(--green)">
+            <div class="metric-icon" aria-hidden="true">%</div>
+            <div>
+              <div class="label">成功率</div>
+              <div class="value" id="successRateKpi">0%</div>
+              <div class="sub" id="successRate">等待对比 · 持续 0ms</div>
+            </div>
+          </article>
+          <article class="card metric-card" style="--accent: var(--orange)">
+            <div class="metric-icon" aria-hidden="true">⏱</div>
+            <div>
+              <div class="label">平均建连(P50)</div>
+              <div class="value" id="avgLatency">0ms</div>
+              <div class="sub" id="latencySub">等待对比 · 慢建连 0</div>
+            </div>
+          </article>
+          <article class="card metric-card" style="--accent: var(--red)">
+            <div class="metric-icon" aria-hidden="true">¥</div>
+            <div>
+              <div class="label">今日费用</div>
+              <div class="value" id="estimatedCost">¥0</div>
+              <div class="sub" id="costSub">等待对比 · API 0 / 套餐 0</div>
+            </div>
+          </article>
+          <article class="card metric-card" style="--accent: var(--violet)">
+            <div class="metric-icon" aria-hidden="true">T</div>
+            <div>
+              <div class="label">今日 Token</div>
+              <div class="value" id="totalTokens">0</div>
+              <div class="sub" id="tokenSub">等待对比 · 输入 0 / 输出 0</div>
+            </div>
+            <div id="cacheTokens" hidden>0</div>
+            <div id="cacheSub" hidden>读 0 / 写 0</div>
+          </article>
+        </section>
+
+        <section class="overview-main" data-widget="trend">
+          <button class="drag-handle" type="button" aria-label="拖动趋势图">拖动</button>
+          <div class="trend-panel">
+            <div class="trend-head">
+              <div>
+                <h2>请求趋势</h2>
+                <p>按时间查看请求量、Token 与费用变化</p>
+              </div>
+              <div class="trend-actions">
+                <select class="time-window" id="timeWindow" aria-label="趋势时间窗口">
+                  <option value="day">今日</option>
+                  <option value="week">近 7 天</option>
+                  <option value="month">近 30 天</option>
+                  <option value="all">全部</option>
+                </select>
+                <div class="segment" role="group" aria-label="range">
+                  <button data-range="day" class="active">日</button>
+                  <button data-range="week">周</button>
+                  <button data-range="month">月</button>
+                  <button data-range="all">全</button>
+                </div>
+                <div class="legend">
+                  <span style="--dot: var(--green)">Token</span>
+                  <span style="--dot: var(--red)">费用</span>
+                </div>
+              </div>
+            </div>
+            <div class="model-filter" id="modelFilter"></div>
+            <div id="trendChart" class="empty-chart">暂无趋势数据</div>
+          </div>
+          <section class="table provider-health-panel">
+            <div class="table-head">
+              <h2>服务商健康状态</h2>
+              <button class="layout-action" id="layoutToggle" aria-pressed="false">编辑布局</button>
+            </div>
+            <div id="providerHealth"></div>
+            <div id="providerSummary" hidden></div>
+          </section>
+        </section>
+
+        <section class="bottom-grid layout-widget" data-widget="bottom">
+          <div class="table">
+            <div class="table-head">
+              <h2>最近异常</h2>
+              <a class="table-link" href="#" data-tab-target="requests">全部请求</a>
+            </div>
+            <div id="recentAnomaliesTable"></div>
+            <div id="recentAnomalies" hidden></div>
+          </div>
+          <div class="table">
+            <div class="table-head">
+              <h2>最近请求</h2>
+              <div class="table-actions">
+                <button class="layout-action" id="resetLayout" hidden>恢复默认</button>
+                <button class="danger" id="clearProxy">清除统计</button>
+              </div>
+            </div>
+            <div id="recentRequestsTable"></div>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section class="tab-panel" data-tab-panel="providers">
+      <section class="details diagnostics">
+        <div class="table">
+          <h2>代理状态</h2>
+          <div class="runtime-list" id="runtimeStatus"></div>
+        </div>
+        <div class="table">
+          <h2>Host 统计</h2>
+          <div id="hosts"></div>
+        </div>
+      </section>
+    </section>
+
+    <section class="tab-panel" data-tab-panel="requests">
+      <section class="details">
+        <div class="table">
+          <h2>Client breakdown</h2>
+          <div id="clientBreakdown"></div>
+        </div>
+        <div class="table">
+          <h2>最近请求</h2>
+          <div id="recentRequests"></div>
+        </div>
+      </section>
+    </section>
+
+    <section class="tab-panel" data-tab-panel="usage">
+      <section class="details">
+        <div class="table">
+          <h2>路由拆分</h2>
+          <div id="routes"></div>
+        </div>
+        <div class="table">
+          <h2>模型拆分</h2>
+          <div id="models"></div>
+        </div>
+      </section>
+    </section>
+
+    <section class="tab-panel" data-tab-panel="whitelist">
+      <section class="split-panels">
+        <div class="table">
+          <h2>白名单</h2>
+          <p class="panel-intro" id="whitelistMeta">正在读取 whitelist.txt...</p>
+          <div class="toolbar-row">
+            <input class="text-input" id="whitelistInput" placeholder="例如 *.github.com 或 api.deepseek.com" aria-label="新增白名单条目">
+            <button class="primary-action" id="addWhitelistEntry">添加</button>
+            <button class="secondary-action" id="saveWhitelist">保存</button>
+          </div>
+          <div class="feedback info" id="whitelistFeedback" role="status" aria-live="polite"></div>
+          <div class="entry-list" id="whitelistEntries"></div>
+        </div>
+        <div class="table">
+          <h2>候选 Host 分析</h2>
+          <p class="panel-intro">这些 Host 经常走代理，可结合延迟和业务重要性决定是否加入白名单直连。</p>
+          <div class="entry-list" id="whitelistCandidates"></div>
+        </div>
+      </section>
+    </section>
+
+    <section class="tab-panel" data-tab-panel="doctor">
+      <section class="table">
+        <h2>诊断</h2>
+        <p class="panel-intro" id="doctorMeta">正在运行本机自检...</p>
+        <div class="toolbar-row">
+          <button class="primary-action" id="runDoctor">重新自检</button>
+        </div>
+        <div class="doctor-list" id="doctorChecks"></div>
+      </section>
+    </section>
+
+    <div class="status" id="status">等待刷新</div>
+    </div>
+  </main>
+  <script src="/assets/dashboard.js"></script>
+</body>
+</html>

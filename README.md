@@ -289,7 +289,7 @@ smart-proxy 不解密 HTTPS，也不会读取 API key。token 用量来自 Claud
 https://api-docs.deepseek.com/zh-cn/quick_start/pricing/
 ```
 
-DeepSeek Pro 页面价格包含截至 `2026-05-31 23:59` 的优惠价；如果官方价格调整，更新 `pricing.py` 即可。
+DeepSeek Pro 页面价格包含截至 `2026-05-31 23:59` 的优惠价；如果官方价格调整，更新 `smart_proxy/pricing.py` 即可。
 
 ## 配置
 
@@ -410,6 +410,9 @@ python --version
 | 文件 | 说明 |
 |------|------|
 | `smart-proxy.py` | 核心 sidecar，监听 127.0.0.1:8889 |
+| `smart_proxy/` | 核心 Python 包，包含配置、统计、Dashboard API、白名单、用量读取和计价逻辑 |
+| `web/` | Dashboard HTML/CSS/JS 静态资源 |
+| `docs/` | 分类文档，按 design / operations / research / tracker 组织 |
 | `whitelist.txt` | 白名单域名配置（可选，一行一个） |
 | `claude-with-proxy.ps1` | Claude Code 启动脚本模板（需替换路径） |
 | `start-proxy.vbs` | Windows 无窗口后台启动脚本 |
@@ -463,7 +466,7 @@ curl -x http://127.0.0.1:8889 https://www.baidu.com
 ### 代码规范
 
 - 使用 Python 标准库，不引入第三方依赖
-- 保持代码简洁，单个文件不超过 500 行
+- 保持代码简洁；新增大块逻辑优先放入职责明确的独立模块，避免继续扩大已有大文件
 - 添加新功能时同步更新白名单示例
 - 跨平台适配请放在独立文件（如 `proxy_macos.py`、`proxy_linux.py`）
 

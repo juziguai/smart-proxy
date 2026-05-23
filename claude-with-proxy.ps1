@@ -129,7 +129,8 @@ $env:HTTP_PROXY  = "http://127.0.0.1:8889"
 $env:HTTPS_PROXY = "http://127.0.0.1:8889"
 Write-Host "[proxy] -> 127.0.0.1:8889 (auto-detect)" -ForegroundColor Green
 Write-Host "[stats] -> http://127.0.0.1:8890" -ForegroundColor Green
-Open-ManagementPagesInChrome | Out-Null
+# Auto-open of management pages is currently disabled.
+# Open-ManagementPagesInChrome | Out-Null
 Write-Host ""
 
 function Get-EnvValue {

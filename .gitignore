@@ -1,4 +1,25 @@
 __pycache__/
 *.pyc
+.pytest_cache/
+
+# Local runtime outputs
 logs/
+data/
+diagnostics/
 smart-proxy-stats.db*
+*.db
+*.db-*
+*.sqlite*
+*.sqlite-*
+
+# Local-only project notes and tests
+docs/
+tests/
+
+# Local/private environment and machine-specific helpers
+.env
+.env.*
+*.local
+*.local.*
+whitelist.txt
+antigravity-tls-relay.py
