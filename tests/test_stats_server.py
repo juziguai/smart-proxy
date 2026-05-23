@@ -286,7 +286,7 @@ class StatsServerTests(unittest.TestCase):
 
         html = body.decode("utf-8")
         self.assertEqual(status, 200)
-        self.assertIn("Smart Proxy Console", html)
+        self.assertIn("智能代理控制台", html)
         self.assertIn('id="proxyChip"', html)
         self.assertIn('id="dashboardChip"', html)
         self.assertIn('data-tab-target="overview"', html)
@@ -360,6 +360,9 @@ class StatsServerTests(unittest.TestCase):
         self.assertIn("providerGroups", html)
         self.assertIn("provider-logo", html)
         self.assertIn("provider-subtitle", html)
+        self.assertIn("服务商健康状态", html)
+        self.assertIn("用量与成本", html)
+        self.assertIn("CONNECT 隧道连接数", html)
         self.assertIn("successRateText", html)
         self.assertIn("changeText", html)
         self.assertIn("deltaComparisonText", html)
@@ -395,6 +398,27 @@ class StatsServerTests(unittest.TestCase):
             html.index('data-tab-panel="usage"'),
             html.index('id="models"'),
         )
+
+    def test_dashboard_renders_client_attribution_views(self):
+        with TemporaryDirectory() as temp_dir:
+            store = StatsStore(f"{temp_dir}/stats.db")
+
+            status, _headers, body = handle_stats_request(
+                "GET",
+                urlparse("/"),
+                store,
+            )
+
+        html = body.decode("utf-8")
+        self.assertEqual(status, 200)
+        self.assertIn('id="clientBreakdown"', html)
+        self.assertIn("clientRows", html)
+        self.assertIn("clientLabel", html)
+        self.assertIn("clientProcessText", html)
+        self.assertIn("requestClientText", html)
+        self.assertIn("client-source", html)
+        self.assertIn("client_label", html)
+        self.assertIn("client_process", html)
 
     def test_dashboard_html_renders_model_token_breakdown(self):
         with TemporaryDirectory() as temp_dir:

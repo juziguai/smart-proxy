@@ -578,6 +578,13 @@ DASHBOARD_HTML = """<!doctype html>
       background: #ffe4e8;
       color: var(--red);
     }
+    .pill.client-source {
+      background: #ecebff;
+      color: var(--violet);
+      max-width: 260px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
     .request-time {
       color: var(--muted);
       font-size: 12px;
@@ -1321,11 +1328,11 @@ DASHBOARD_HTML = """<!doctype html>
     <header class="topbar">
       <div class="brand">
         <span class="brand-mark" aria-hidden="true">⬢</span>
-        <span>Smart Proxy Console</span>
+        <span>智能代理控制台</span>
       </div>
       <div class="shell-status" aria-label="service status">
-        <span class="status-chip good" id="proxyChip">Proxy 127.0.0.1:8889</span>
-        <span class="status-chip good" id="dashboardChip">Dashboard 127.0.0.1:8890</span>
+        <span class="status-chip good" id="proxyChip">代理 127.0.0.1:8889</span>
+        <span class="status-chip good" id="dashboardChip">管理端 127.0.0.1:8890</span>
         <span class="status-chip" id="upstreamChip" hidden>Upstream detecting</span>
       </div>
       <div class="top-actions">
@@ -1343,11 +1350,11 @@ DASHBOARD_HTML = """<!doctype html>
 
     <nav class="tab-nav" aria-label="dashboard sections">
       <button class="tab-button active" data-tab-target="overview">总览</button>
-      <button class="tab-button" data-tab-target="providers">Providers</button>
-      <button class="tab-button" data-tab-target="requests">Requests</button>
-      <button class="tab-button" data-tab-target="usage">Usage & Cost</button>
-      <button class="tab-button" data-tab-target="whitelist">Whitelist</button>
-      <button class="tab-button" data-tab-target="doctor">Doctor</button>
+      <button class="tab-button" data-tab-target="providers">服务商</button>
+      <button class="tab-button" data-tab-target="requests">请求</button>
+      <button class="tab-button" data-tab-target="usage">用量与成本</button>
+      <button class="tab-button" data-tab-target="whitelist">白名单</button>
+      <button class="tab-button" data-tab-target="doctor">诊断</button>
     </nav>
 
     <div class="console-content">
@@ -1445,7 +1452,7 @@ DASHBOARD_HTML = """<!doctype html>
           </div>
           <section class="table provider-health-panel">
             <div class="table-head">
-              <h2>Provider 健康状态</h2>
+              <h2>服务商健康状态</h2>
               <button class="layout-action" id="layoutToggle" aria-pressed="false">编辑布局</button>
             </div>
             <div id="providerHealth"></div>
@@ -1490,9 +1497,15 @@ DASHBOARD_HTML = """<!doctype html>
     </section>
 
     <section class="tab-panel" data-tab-panel="requests">
-      <section class="table recent-panel">
-        <h2>最近请求</h2>
-        <div id="recentRequests"></div>
+      <section class="details">
+        <div class="table">
+          <h2>Client breakdown</h2>
+          <div id="clientBreakdown"></div>
+        </div>
+        <div class="table">
+          <h2>最近请求</h2>
+          <div id="recentRequests"></div>
+        </div>
       </section>
     </section>
 
@@ -1512,7 +1525,7 @@ DASHBOARD_HTML = """<!doctype html>
     <section class="tab-panel" data-tab-panel="whitelist">
       <section class="split-panels">
         <div class="table">
-          <h2>Whitelist</h2>
+          <h2>白名单</h2>
           <p class="panel-intro" id="whitelistMeta">正在读取 whitelist.txt...</p>
           <div class="toolbar-row">
             <input class="text-input" id="whitelistInput" placeholder="例如 *.github.com 或 api.deepseek.com" aria-label="新增白名单条目">
@@ -1532,7 +1545,7 @@ DASHBOARD_HTML = """<!doctype html>
 
     <section class="tab-panel" data-tab-panel="doctor">
       <section class="table">
-        <h2>Doctor</h2>
+        <h2>诊断</h2>
         <p class="panel-intro" id="doctorMeta">正在运行本机自检...</p>
         <div class="toolbar-row">
           <button class="primary-action" id="runDoctor">重新自检</button>
@@ -1971,12 +1984,43 @@ DASHBOARD_HTML = """<!doctype html>
       }).join('');
       return `
         <table class="provider-table">
-          <thead><tr><th>Provider</th><th>状态</th><th>成功率</th><th>请求</th><th>建连</th></tr></thead>
+          <thead><tr><th>服务商</th><th>状态</th><th>成功率</th><th title="代理层 CONNECT 隧道连接数，不等于模型 API 调用次数">连接</th><th>建连</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       `;
     };
     const successRateText = value => `${(value * 100).toFixed(2)}%`;
+    const clientLabel = client => client?.client_label || 'Unknown';
+    const clientProcessText = client => {
+      const process = client?.client_process || '';
+      return process && process !== 'unknown' ? process : 'unknown process';
+    };
+    const requestClientText = request => {
+      const label = request?.client_label || 'Unknown';
+      const process = request?.client_process || '';
+      const pid = request?.client_pid ? ` PID ${request.client_pid}` : '';
+      return process ? `${label} / ${process}${pid}` : label;
+    };
+    const clientRows = clients => {
+      if (!clients.length) {
+        return '<div class="row"><span>No client data</span><strong>0</strong></div>';
+      }
+      return clients.map(client => `
+        <div class="host-row client-row">
+          <div class="host-main">
+            <strong>${escapeHtml(clientLabel(client))}</strong>
+            <span>${escapeHtml(clientProcessText(client))}</span>
+          </div>
+          <div class="host-meta">
+            <span class="pill">${fmt.format(client.total_requests || 0)} requests</span>
+            <span class="pill good">ok ${fmt.format(client.successful_requests || 0)}</span>
+            <span class="pill bad">fail ${fmt.format(client.failed_requests || 0)}</span>
+            <span class="pill">slow ${fmt.format(client.slow_requests || 0)}</span>
+            <span class="pill">connect ${fmt.format(client.average_connect_latency_ms || 0)}ms</span>
+          </div>
+        </div>
+      `).join('');
+    };
     const recentRows = requests => {
       if (!requests.length) {
         return '<div class="row"><span>暂无请求</span><strong>0</strong></div>';
@@ -1999,6 +2043,7 @@ DASHBOARD_HTML = """<!doctype html>
             </div>
             <div class="host-meta">
               <span class="pill ${statusClass}">${statusText}</span>
+              <span class="pill client-source" title="${escapeHtml(requestClientText(request))}">${escapeHtml(requestClientText(request))}</span>
               <span class="pill">建连 ${fmt.format(request.connect_latency_ms || 0)}ms</span>
               <span class="pill">持续 ${fmt.format(request.duration_ms || request.latency_ms || 0)}ms</span>
               <span class="request-time">${escapeHtml(when)}</span>
@@ -2027,6 +2072,7 @@ DASHBOARD_HTML = """<!doctype html>
           <tr>
             <td>${escapeHtml(when)}</td>
             <td><strong>${escapeHtml(request.host || '-')}</strong></td>
+            <td><span class="pill client-source" title="${escapeHtml(requestClientText(request))}">${escapeHtml(requestClientText(request))}</span></td>
             <td>${escapeHtml(request.method || '-')}</td>
             <td>${escapeHtml(routeText(request.route || '-'))}</td>
             <td><span class="status-badge ${statusClass}">${statusText}</span></td>
@@ -2036,7 +2082,7 @@ DASHBOARD_HTML = """<!doctype html>
       }).join('');
       return `
         <table class="data-table">
-          <thead><tr><th>时间</th><th>Host</th><th>方法</th><th>路由</th><th>状态</th><th>耗时</th></tr></thead>
+          <thead><tr><th>时间</th><th>Host</th><th>Client</th><th>方法</th><th>路由</th><th>状态</th><th>耗时</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       `;
@@ -2115,8 +2161,8 @@ DASHBOARD_HTML = """<!doctype html>
       const proxyChip = document.getElementById('proxyChip');
       const dashboardChip = document.getElementById('dashboardChip');
       const upstreamChip = document.getElementById('upstreamChip');
-      proxyChip.textContent = 'Proxy 127.0.0.1:8889';
-      dashboardChip.textContent = 'Dashboard 127.0.0.1:8890';
+      proxyChip.textContent = '代理 127.0.0.1:8889';
+      dashboardChip.textContent = '管理端 127.0.0.1:8890';
       upstreamChip.textContent = status.proxy_enabled
         ? `Upstream ${status.upstream_proxy || 'enabled'}`
         : 'Upstream direct';
@@ -2428,6 +2474,7 @@ DASHBOARD_HTML = """<!doctype html>
       document.getElementById('hosts').innerHTML = hostRows(p.hosts || []);
       document.getElementById('providerSummary').innerHTML = providerSummaryRows(p.hosts || []);
       document.getElementById('providerHealth').innerHTML = providerHealthTable(p.hosts || []);
+      document.getElementById('clientBreakdown').innerHTML = clientRows(p.clients || []);
       document.getElementById('recentRequests').innerHTML = recentRows(recentData.requests || []);
       document.getElementById('recentAnomalies').innerHTML = anomalyRows(recentData.requests || []);
       document.getElementById('recentRequestsTable').innerHTML = requestTableRows(recentData.requests || []);

@@ -109,6 +109,28 @@ class HttpDirectTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ProxyTelemetryTests(unittest.IsolatedAsyncioTestCase):
+    def test_resolve_client_process_falls_back_to_unknown_on_lookup_error(self):
+        original_find_client_pid = smart_proxy.find_client_pid
+        try:
+            def fake_find_client_pid(client_addr, client_port):
+                raise OSError("tcp table unavailable")
+
+            smart_proxy.find_client_pid = fake_find_client_pid
+
+            info = smart_proxy.resolve_client_process("127.0.0.1", 51111)
+        finally:
+            smart_proxy.find_client_pid = original_find_client_pid
+
+        self.assertEqual(
+            info,
+            {
+                "pid": None,
+                "process": "",
+                "exe": "",
+                "label": "Unknown",
+            },
+        )
+
     async def test_handle_records_successful_proxy_request(self):
         stats_store = FakeStatsStore()
         client_reader = FakeReader(
@@ -149,6 +171,59 @@ class ProxyTelemetryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(event.success)
         self.assertIsNone(event.error)
         self.assertGreaterEqual(event.latency_ms, 0)
+
+    async def test_handle_records_client_process_attribution(self):
+        stats_store = FakeStatsStore()
+        client_reader = FakeReader(
+            lines=[
+                b"CONNECT daily-cloudcode-pa.googleapis.com:443 HTTP/1.1\r\n",
+                b"\r\n",
+            ]
+        )
+        client_writer = FakeWriter(peername=("127.0.0.1", 51111))
+
+        original_cache = smart_proxy.proxy_cache
+        original_whitelist = smart_proxy.whitelist
+        original_stats_store = smart_proxy.stats_store
+        original_connect_via_proxy = smart_proxy.connect_via_proxy
+        original_resolve_client_process = smart_proxy.resolve_client_process
+        try:
+            smart_proxy.proxy_cache = FakeProxyCache(("127.0.0.1", 10090))
+            smart_proxy.whitelist = FakeWhitelist(False)
+            smart_proxy.stats_store = stats_store
+
+            async def fake_connect_via_proxy(client_r, client_w, target, upstream):
+                return smart_proxy.ForwardResult(success=True, connect_latency_ms=12)
+
+            def fake_resolve_client_process(client_addr, client_port):
+                self.assertEqual(client_addr, "127.0.0.1")
+                self.assertEqual(client_port, 51111)
+                return {
+                    "pid": 4321,
+                    "process": "Antigravity.exe",
+                    "exe": "C:\\Users\\juzi\\AppData\\Local\\Programs\\antigravity\\Antigravity.exe",
+                    "label": "Antigravity",
+                }
+
+            smart_proxy.connect_via_proxy = fake_connect_via_proxy
+            smart_proxy.resolve_client_process = fake_resolve_client_process
+
+            await smart_proxy.handle(client_reader, client_writer)
+        finally:
+            smart_proxy.proxy_cache = original_cache
+            smart_proxy.whitelist = original_whitelist
+            smart_proxy.stats_store = original_stats_store
+            smart_proxy.connect_via_proxy = original_connect_via_proxy
+            smart_proxy.resolve_client_process = original_resolve_client_process
+
+        event = stats_store.events[0]
+        self.assertEqual(event.client_pid, 4321)
+        self.assertEqual(event.client_process, "Antigravity.exe")
+        self.assertEqual(
+            event.client_exe,
+            "C:\\Users\\juzi\\AppData\\Local\\Programs\\antigravity\\Antigravity.exe",
+        )
+        self.assertEqual(event.client_label, "Antigravity")
 
     async def test_handle_records_connect_latency_and_duration_separately(self):
         stats_store = FakeStatsStore()

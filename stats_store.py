@@ -47,6 +47,10 @@ class ProxyRequestEvent:
     target_port: int | None = None
     upstream_host: str = ""
     upstream_port: int | None = None
+    client_pid: int | None = None
+    client_process: str = ""
+    client_exe: str = ""
+    client_label: str = ""
 
 
 class StatsStore:
@@ -85,9 +89,13 @@ class StatsStore:
                         target_port,
                         upstream_host,
                         upstream_port,
+                        client_pid,
+                        client_process,
+                        client_exe,
+                        client_label,
                         error
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         event.started_at,
@@ -105,6 +113,10 @@ class StatsStore:
                         event.target_port,
                         event.upstream_host,
                         event.upstream_port,
+                        event.client_pid,
+                        event.client_process,
+                        event.client_exe,
+                        event.client_label,
                         event.error,
                     ),
                 )
@@ -144,6 +156,10 @@ class StatsStore:
                     target_port,
                     upstream_host,
                     upstream_port,
+                    client_pid,
+                    client_process,
+                    client_exe,
+                    client_label,
                     error
                 FROM proxy_requests
                 {where}
@@ -186,6 +202,14 @@ class StatsStore:
                     if row["upstream_port"] is not None
                     else None
                 ),
+                "client_pid": (
+                    int(row["client_pid"])
+                    if row["client_pid"] is not None
+                    else None
+                ),
+                "client_process": row["client_process"] or "",
+                "client_exe": row["client_exe"] or "",
+                "client_label": row["client_label"] or "Unknown",
                 "slow": (
                     row["connect_latency_ms"] is not None
                     and int(row["connect_latency_ms"]) >= SLOW_REQUEST_THRESHOLD_MS
@@ -438,6 +462,28 @@ class StatsStore:
                 """,
                 [SLOW_REQUEST_THRESHOLD_MS] + params,
             ).fetchall()
+            client_rows = conn.execute(
+                f"""
+                SELECT
+                    COALESCE(NULLIF(client_label, ''), 'Unknown') AS client_label,
+                    COALESCE(NULLIF(client_process, ''), 'unknown') AS client_process,
+                    COUNT(*) AS total_requests,
+                    COALESCE(SUM(success), 0) AS successful_requests,
+                    COALESCE(SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END), 0)
+                        AS failed_requests,
+                    COALESCE(SUM(CASE WHEN {connect_latency_expr} >= ? THEN 1 ELSE 0 END), 0)
+                        AS slow_requests,
+                    COALESCE(AVG({connect_latency_expr}), 0)
+                        AS average_connect_latency_ms,
+                    COALESCE(AVG({duration_expr}), 0) AS average_duration_ms
+                FROM proxy_requests
+                {where}
+                GROUP BY client_label, client_process
+                ORDER BY COUNT(*) DESC, failed_requests DESC, average_connect_latency_ms DESC
+                LIMIT 20
+                """,
+                [SLOW_REQUEST_THRESHOLD_MS] + params,
+            ).fetchall()
 
         total_requests = int(row["total_requests"])
         successful_requests = int(row["successful_requests"])
@@ -532,6 +578,19 @@ class StatsStore:
         )
         alerts = self._build_proxy_alerts(host_breakdown)
         slow_requests = sum(item["slow_requests"] for item in host_breakdown)
+        clients = [
+            {
+                "client_label": row["client_label"],
+                "client_process": row["client_process"],
+                "total_requests": int(row["total_requests"]),
+                "successful_requests": int(row["successful_requests"]),
+                "failed_requests": int(row["failed_requests"]),
+                "slow_requests": int(row["slow_requests"]),
+                "average_connect_latency_ms": int(row["average_connect_latency_ms"]),
+                "average_duration_ms": int(row["average_duration_ms"]),
+            }
+            for row in client_rows
+        ]
 
         return {
             "total_requests": total_requests,
@@ -547,6 +606,7 @@ class StatsStore:
                 for route_row in route_rows
             },
             "hosts": host_breakdown[:20],
+            "clients": clients,
             "alerts": alerts,
             "alert_counts": {
                 "critical": sum(
@@ -838,6 +898,10 @@ class StatsStore:
                         target_port INTEGER,
                         upstream_host TEXT,
                         upstream_port INTEGER,
+                        client_pid INTEGER,
+                        client_process TEXT,
+                        client_exe TEXT,
+                        client_label TEXT,
                         error TEXT
                     )
                     """
@@ -906,6 +970,14 @@ class StatsStore:
             conn.execute("ALTER TABLE proxy_requests ADD COLUMN upstream_host TEXT")
         if "upstream_port" not in columns:
             conn.execute("ALTER TABLE proxy_requests ADD COLUMN upstream_port INTEGER")
+        if "client_pid" not in columns:
+            conn.execute("ALTER TABLE proxy_requests ADD COLUMN client_pid INTEGER")
+        if "client_process" not in columns:
+            conn.execute("ALTER TABLE proxy_requests ADD COLUMN client_process TEXT")
+        if "client_exe" not in columns:
+            conn.execute("ALTER TABLE proxy_requests ADD COLUMN client_exe TEXT")
+        if "client_label" not in columns:
+            conn.execute("ALTER TABLE proxy_requests ADD COLUMN client_label TEXT")
 
     def _connect_latency_expr(self):
         return (

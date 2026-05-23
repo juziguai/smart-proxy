@@ -282,6 +282,10 @@ class StatsStoreTests(unittest.TestCase):
                 target_port=443,
                 upstream_host="127.0.0.1",
                 upstream_port=10808,
+                client_pid=1234,
+                client_process="Antigravity.exe",
+                client_exe="C:\\Users\\juzi\\AppData\\Local\\Programs\\antigravity\\Antigravity.exe",
+                client_label="Antigravity",
             )
         )
 
@@ -294,6 +298,49 @@ class StatsStoreTests(unittest.TestCase):
         self.assertEqual(recent["upstream_host"], "127.0.0.1")
         self.assertEqual(recent["upstream_port"], 10808)
         self.assertEqual(recent["duration_ms"], 250)
+        self.assertEqual(recent["client_pid"], 1234)
+        self.assertEqual(recent["client_process"], "Antigravity.exe")
+        self.assertEqual(
+            recent["client_exe"],
+            "C:\\Users\\juzi\\AppData\\Local\\Programs\\antigravity\\Antigravity.exe",
+        )
+        self.assertEqual(recent["client_label"], "Antigravity")
+
+    def test_proxy_summary_includes_client_breakdown(self):
+        tmp_path = self.enterContext(TemporaryDirectoryPath())
+        store = StatsStore(tmp_path / "stats.db")
+
+        for index, (label, process, success) in enumerate(
+            (
+                ("Claude Code", "node.exe", True),
+                ("Claude Code", "node.exe", False),
+                ("Antigravity", "Antigravity.exe", True),
+            ),
+            start=1,
+        ):
+            store.record_proxy_request(
+                ProxyRequestEvent(
+                    started_at=iso_at(index),
+                    completed_at=iso_at(index),
+                    method="CONNECT",
+                    host="api.example.com",
+                    route="proxy",
+                    success=success,
+                    latency_ms=100,
+                    error=None if success else "bad gateway",
+                    client_process=process,
+                    client_label=label,
+                )
+            )
+
+        clients = store.get_summary("all")["proxy"]["clients"]
+
+        self.assertEqual(clients[0]["client_label"], "Claude Code")
+        self.assertEqual(clients[0]["client_process"], "node.exe")
+        self.assertEqual(clients[0]["total_requests"], 2)
+        self.assertEqual(clients[0]["failed_requests"], 1)
+        self.assertEqual(clients[1]["client_label"], "Antigravity")
+        self.assertEqual(clients[1]["total_requests"], 1)
 
     def test_connect_latency_marks_slow_request(self):
         tmp_path = self.enterContext(TemporaryDirectoryPath())
