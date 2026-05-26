@@ -11,16 +11,7 @@ import sys
 import time
 import uuid
 
-# ── ProxyProfiler Logger 配置 ──────────────────────────────────────────
-profiler_logger = logging.getLogger("ProxyProfiler")
-if not profiler_logger.handlers:
-    # 格式：[sp_profiler HH:MM:SS] msg
-    handler = logging.StreamHandler(sys.stdout)
-    formatter = logging.Formatter("[sp_profiler %(asctime)s] %(message)s", datefmt="%H:%M:%S")
-    handler.setFormatter(formatter)
-    profiler_logger.addHandler(handler)
-    profiler_logger.setLevel(logging.INFO)
-
+from smart_proxy.logger import profiler_logger
 
 class LatencyTracker:
     """全链路高精度分层耗时与流量统计追踪器"""
@@ -289,8 +280,10 @@ def extract_target_port(method, target):
 
 
 def log(msg):
-    ts = time.strftime("%H:%M:%S")
-    print(f"[sp {ts}] {msg}", flush=True)
+    if sys.stdout.isatty():
+        ts = time.strftime("%H:%M:%S")
+        print(f"[sp {ts}] {msg}", flush=True)
+
 
 
 async def relay(src_reader, dst_writer):
@@ -950,19 +943,125 @@ async def handle(client_r, client_w):
             pass
 
 
+def kill_process_by_port(port: int) -> bool:
+    """
+    通过 Windows 原生 netstat -ano 查找监听指定端口的进程 PID，
+    并使用 taskkill /F /PID 强杀之（跳过当前进程自身）。
+    返回是否成功执行了强杀。
+    """
+    import subprocess
+    import os
+
+    msg = f"[Port-Heal] 检测到端口 {port} 被占用，正在尝试定位占用进程..."
+    log(msg)
+    profiler_logger.info(msg)
+    my_pid = os.getpid()
+    killed = False
+    try:
+        # 执行 netstat -ano
+        output = subprocess.check_output("netstat -ano", shell=True, text=True, errors="ignore")
+        pids_to_kill = set()
+        for line in output.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            # 我们需要确保是监听状态，并且端口确实匹配
+            # 格式: 协议 本地地址 外部地址 状态 PID
+            parts = line.split()
+            if len(parts) >= 5 and parts[3].upper() == "LISTENING":
+                local_addr = parts[1]
+                # 提取端口，可能形如 127.0.0.1:8889 或 [::]:8889 或 0.0.0.0:8889
+                if local_addr.endswith(f":{port}"):
+                    try:
+                        pid = int(parts[-1])
+                        if pid != my_pid and pid > 0:
+                            pids_to_kill.add(pid)
+                    except ValueError:
+                        pass
+        
+        for pid in pids_to_kill:
+            msg = f"[Port-Heal] 发现目标进程 PID {pid} 正在占用端口 {port}，执行强杀..."
+            log(msg)
+            profiler_logger.info(msg)
+            # 运行 taskkill /F /PID <pid>
+            subprocess.run(f"taskkill /F /PID {pid}", shell=True, capture_output=True)
+            killed = True
+            
+        if not pids_to_kill:
+            msg = f"[Port-Heal] 未发现其他进程占用端口 {port} (可能是协议栈处于 TIME_WAIT 状态)"
+            log(msg)
+            profiler_logger.info(msg)
+    except Exception as exc:
+        msg = f"[Port-Heal] 端口清理执行异常: {exc}"
+        log(msg)
+        profiler_logger.info(msg)
+    return killed
+
+
 async def main():
     global stats_store
     stats_store = StatsStore(STATS_DB_FILE)
-    server = await asyncio.start_server(handle, LISTEN_HOST, LISTEN_PORT)
-    dashboard = await start_stats_server_with_status(
-        stats_store,
-        DASHBOARD_HOST,
-        DASHBOARD_PORT,
-        status_provider=build_runtime_status,
-        whitelist_provider=WhitelistProvider(whitelist, lambda: stats_store),
-        doctor_provider=build_doctor_report,
-        provider_health_provider=build_provider_health_report,
-    )
+    
+    # 1. 尝试拉起 8889 代理端口，带自愈重试
+    server = None
+    try:
+        server = await asyncio.start_server(handle, LISTEN_HOST, LISTEN_PORT)
+    except OSError as exc:
+        if exc.errno == 10048 or "already in use" in str(exc).lower():
+            msg = f"[Port-Heal] 代理服务端口 {LISTEN_PORT} 被占用。触发自愈清理..."
+            log(msg)
+            profiler_logger.info(msg)
+            kill_process_by_port(LISTEN_PORT)
+            await asyncio.sleep(0.5)  # 缓冲给操作系统释放句柄
+            # 第二次重试
+            server = await asyncio.start_server(handle, LISTEN_HOST, LISTEN_PORT)
+            msg = f"[Port-Heal] 代理服务端口 {LISTEN_PORT} 自愈绑定成功！"
+            log(msg)
+            profiler_logger.info(msg)
+        else:
+            raise
+
+    # 2. 尝试拉起 8890 状态/Dashboard 端口，带自愈重试
+    dashboard = None
+    try:
+        dashboard = await start_stats_server_with_status(
+            stats_store,
+            DASHBOARD_HOST,
+            DASHBOARD_PORT,
+            status_provider=build_runtime_status,
+            whitelist_provider=WhitelistProvider(whitelist, lambda: stats_store),
+            doctor_provider=build_doctor_report,
+            provider_health_provider=build_provider_health_report,
+        )
+    except OSError as exc:
+        if exc.errno == 10048 or "already in use" in str(exc).lower():
+            msg = f"[Port-Heal] Dashboard服务端口 {DASHBOARD_PORT} 被占用。触发自愈清理..."
+            log(msg)
+            profiler_logger.info(msg)
+            kill_process_by_port(DASHBOARD_PORT)
+            await asyncio.sleep(0.5)
+            # 第二次重试
+            dashboard = await start_stats_server_with_status(
+                stats_store,
+                DASHBOARD_HOST,
+                DASHBOARD_PORT,
+                status_provider=build_runtime_status,
+                whitelist_provider=WhitelistProvider(whitelist, lambda: stats_store),
+                doctor_provider=build_doctor_report,
+                provider_health_provider=build_provider_health_report,
+            )
+            msg = f"[Port-Heal] Dashboard服务端口 {DASHBOARD_PORT} 自愈绑定成功！"
+            log(msg)
+            profiler_logger.info(msg)
+        else:
+            if server:
+                server.close()
+            raise
+    except Exception:
+        if server:
+            server.close()
+        raise
+
     log(f"listening {LISTEN_HOST}:{LISTEN_PORT}  |  mode: auto-detect Windows system proxy  |  cache: {CACHE_SEC}s")
     log(f"dashboard http://{DASHBOARD_HOST}:{DASHBOARD_PORT}")
     asyncio.create_task(run_usage_ingestion_loop(stats_store, log=log))
