@@ -767,6 +767,105 @@ async def _read_body(reader, request_bytes):
     return b""
 
 
+import collections
+import time
+
+# 强保护敏感域名：绝对禁止升级为直连，保障翻墙稳定性与密钥隐私
+SENSITIVE_HOSTS = {
+    "api.openai.com", "chatgpt.com", "ab.chatgpt.com",
+    "api.anthropic.com", "anthropic.com", "claude.ai",
+    "generativelanguage.googleapis.com"
+}
+
+class HostRouteScore:
+    """单个 Host 的实时网络时延采样与路由惩罚状态"""
+    def __init__(self):
+        # deque 滑动窗口，记录最近 5 次的 (时延_ms, success)
+        self.direct_history = collections.deque(maxlen=5)
+        self.proxy_history = collections.deque(maxlen=5)
+        
+        # 惩罚降级或升级状态，及过期时间戳
+        self.status = "NORMAL"  # "NORMAL", "DEMOTED" (强制代理), "PROMOTED" (强制直连)
+        self.status_expire_at = 0.0
+
+# 内存自适应路由状态库
+_route_tracker = collections.defaultdict(HostRouteScore)
+
+def decide_adaptive_route(host: str, in_whitelist: bool) -> str:
+    """
+    自适应智能路由核心决策逻辑。
+    返回: "direct" (直连) 或 "proxy" (代理)
+    """
+    global _route_tracker
+    now = time.time()
+    score = _route_tracker[host]
+    
+    # 1. 检查自适应惩罚是否过期，过期则自动恢复探索
+    if score.status != "NORMAL" and now > score.status_expire_at:
+        old_status = score.status
+        score.status = "NORMAL"
+        log(f"[Adaptive-Route] Host {host} 状态 {old_status} 惩罚期满，恢复常规自适应探索...")
+        
+    # 2. 如果处于强保护敏感名单中，强制走原版规则，严禁动态升级为直连
+    is_sensitive = any(sh in host for sh in SENSITIVE_HOSTS)
+    
+    # 3. 状态路由判定
+    if score.status == "DEMOTED":
+        # 正在降级走代理处罚中
+        return "proxy"
+    elif score.status == "PROMOTED" and not is_sensitive:
+        # 正在升级直连享受中
+        return "direct"
+        
+    # 4. 常规白名单判断
+    return "direct" if in_whitelist else "proxy"
+
+
+def record_route_metrics(host: str, route: str, latency_ms: float, success: bool):
+    """记录每一次连接的时延特征，自适应更新惩罚/升格状态"""
+    global _route_tracker
+    score = _route_tracker[host]
+    now = time.time()
+    
+    history = score.direct_history if route == "direct" else score.proxy_history
+    history.append((latency_ms, success))
+    
+    # 检查状态机更新
+    if route == "direct":
+        # 直连状态监控
+        consecutive_failures = 0
+        last_latencies = []
+        for lat, succ in history:
+            last_latencies.append(lat)
+            if not succ:
+                consecutive_failures += 1
+            else:
+                consecutive_failures = 0
+                
+        # 判定 A: 直连发生极其严重的超时 (时延 >= 3000ms)，或者连续 2 次直连失败
+        if (last_latencies and last_latencies[-1] >= 3000) or consecutive_failures >= 2:
+            score.status = "DEMOTED"
+            score.status_expire_at = now + 300.0  # 惩罚 5 分钟
+            msg = f"[Adaptive-Route] 检测到 Host {host} 直连质量崩溃 (时延: {latency_ms:.1f}ms, 成功: {success})。智能降级走代理 5 分钟！"
+            log(msg)
+            profiler_logger.info(msg)
+            
+    elif route == "proxy":
+        # 代理状态监控
+        # 判定 B: 默认代理 Host 建连时延 T3 变得极其拥堵 (时延 >= 2000ms)
+        # 且该域名不在敏感强保护名单中，且以往直连有成功的历史 (没有严重超时)
+        is_sensitive = any(sh in host for sh in SENSITIVE_HOSTS)
+        if not is_sensitive and latency_ms >= 2000:
+            # 查一下最近直连历史，如果没有严重报错，可以尝试升级
+            has_good_direct = len(score.direct_history) > 0 and all(lat < 2000 and succ for lat, succ in score.direct_history)
+            if has_good_direct or len(score.direct_history) == 0:
+                score.status = "PROMOTED"
+                score.status_expire_at = now + 300.0  # 升级享受 5 分钟
+                msg = f"[Adaptive-Route] 检测到 Host {host} 代理耗时严重拥堵 (T3: {latency_ms:.1f}ms)。智能升格直连 5 分钟！"
+                log(msg)
+                profiler_logger.info(msg)
+
+
 # ── main handler ──────────────────────────────────────────────────────
 
 async def handle(client_r, client_w):
@@ -870,11 +969,15 @@ async def handle(client_r, client_w):
     # extract host and check whitelist
     host = extract_host(target, first_line)
     tracker.host = host or target
-    force_direct = whitelist.match(host)
+    
+    # 结合静态白名单进行自适应动态决策
+    in_whitelist = whitelist.match(host) if host else False
+    adaptive_route = decide_adaptive_route(host, in_whitelist) if host else "proxy"
+    force_direct = (adaptive_route == "direct")
 
     if force_direct:
-        via = "direct (whitelist)"
-        route = "direct_whitelist"
+        via = "direct (adaptive)" if in_whitelist else "direct (adaptive_promoted)"
+        route = "direct_whitelist" if in_whitelist else "direct"
     elif upstream:
         via = f"proxy {upstream[0]}:{upstream[1]}"
         route = "proxy"
@@ -937,6 +1040,9 @@ async def handle(client_r, client_w):
             client_exe=client_info["exe"],
             client_label=client_info["label"],
         )
+        if host:
+            sampled_lat = duration_ms if route in ("direct", "direct_whitelist") else (connect_latency_ms or 0.0)
+            record_route_metrics(host, "direct" if route in ("direct", "direct_whitelist") else "proxy", sampled_lat, success)
         try:
             client_w.close()
         except Exception:
