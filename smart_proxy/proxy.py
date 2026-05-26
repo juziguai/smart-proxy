@@ -3,11 +3,55 @@ import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
+import logging
 import os
 from pathlib import Path
 import socket
 import sys
 import time
+import uuid
+
+# ── ProxyProfiler Logger 配置 ──────────────────────────────────────────
+profiler_logger = logging.getLogger("ProxyProfiler")
+if not profiler_logger.handlers:
+    # 格式：[sp_profiler HH:MM:SS] msg
+    handler = logging.StreamHandler(sys.stdout)
+    formatter = logging.Formatter("[sp_profiler %(asctime)s] %(message)s", datefmt="%H:%M:%S")
+    handler.setFormatter(formatter)
+    profiler_logger.addHandler(handler)
+    profiler_logger.setLevel(logging.INFO)
+
+
+class LatencyTracker:
+    """全链路高精度分层耗时与流量统计追踪器"""
+    def __init__(self, request_id: str, host: str = ""):
+        self.request_id = request_id
+        self.host = host
+        
+        # 物理计时节点 (Epoch 秒级)
+        self.t_start = time.time()
+        self.t_t1_end = None
+        self.t_t2_end = None
+        self.t_t3_end = None
+        
+        # 数据流特征追踪
+        self.last_client_write = None
+        self.first_remote_read = None
+        
+        # 状态锁：用于防止粘包/分包引起的误重置
+        self.is_waiting_for_first_token = True
+        self.t4_logged = False
+        
+        # 传输字节量统计
+        self.total_client_bytes = 0
+        self.total_remote_bytes = 0
+        
+    def reset_for_next_keepalive(self):
+        """当长连接复用并检测到流向反转时，自适应重置状态机，开启全新交互轮次"""
+        self.first_remote_read = None
+        self.is_waiting_for_first_token = True
+        self.t4_logged = False
+
 
 from smart_proxy.claude_usage_reader import ClaudeUsageReader
 from smart_proxy.config import DEFAULT_CONFIG
@@ -111,6 +155,13 @@ def build_provider_health_doctor_item(path=PROVIDER_HEALTH_PATH):
     )
 
 
+def build_provider_health_report(path=PROVIDER_HEALTH_PATH):
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "check": build_provider_health_doctor_item(path),
+    }
+
+
 def build_doctor_report():
     upstream = proxy_cache.get()
     whitelist.refresh_if_needed()
@@ -190,7 +241,6 @@ def build_doctor_report():
             "检查 Windows 系统代理设置或上游代理进程。",
         ),
     ]
-    checks.append(build_provider_health_doctor_item())
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "checks": checks,
@@ -256,6 +306,109 @@ async def relay(src_reader, dst_writer):
         pass
 
 
+def print_profiler_report(tracker):
+    t_end = time.time()
+    t_total = t_end - tracker.t_start
+    t1_ms = int((tracker.t_t1_end - tracker.t_start) * 1000) if tracker.t_t1_end else 0
+    t2_ms = int((tracker.t_t2_end - tracker.t_t1_end) * 1000) if (tracker.t_t2_end and tracker.t_t1_end) else 0
+    t3_ms = int((tracker.t_t3_end - tracker.t_t2_end) * 1000) if (tracker.t_t3_end and tracker.t_t2_end) else 0
+    
+    t4 = 0.0
+    if tracker.first_remote_read and tracker.last_client_write:
+        t4 = tracker.first_remote_read - tracker.last_client_write
+    elif tracker.first_remote_read:
+        t4 = tracker.first_remote_read - tracker.t_start
+
+    t5 = 0.0
+    if tracker.first_remote_read:
+        t5 = t_end - tracker.first_remote_read
+        
+    def format_bytes(b):
+        if b < 1024:
+            return f"{b} B"
+        elif b < 1024 * 1024:
+            return f"{b / 1024:.2f} KB"
+        else:
+            return f"{b / 1024 / 1024:.2f} MB"
+            
+    c_bytes_str = format_bytes(tracker.total_client_bytes)
+    r_bytes_str = format_bytes(tracker.total_remote_bytes)
+    
+    profiler_logger.info(
+        f"\n"
+        f"┌─── [ProxyProfiler] [Req #{tracker.request_id}] 全链路分层耗时报告 (Host: {tracker.host}) ───\n"
+        f"│  - T1 (本地中继耗时): {t1_ms} ms\n"
+        f"│  - T2 (本地代理耗时): {t2_ms} ms\n"
+        f"│  - T3 (公网建连耗时): {t3_ms} ms\n"
+        f"│  - T4 (云端首包思考): {t4:.3f} s (TTFT)\n"
+        f"│  - T5 (流式数据传输): {t5:.3f} s\n"
+        f"│  - 链条全程总耗时  : {t_total:.3f} s\n"
+        f"│  - 物理流量交互统计: 客户端发送 {c_bytes_str} | 远程返回 {r_bytes_str}\n"
+        f"└──────────────────────────────────────────────────────────────────────────"
+    )
+
+
+async def relay_client_to_remote(src_reader, dst_writer, tracker):
+    """从客户端读取并转发到远程（C ➔ R），记录最后写入并检测 Keep-Alive 交互流反转"""
+    try:
+        while True:
+            data = await src_reader.read(READ_SIZE)
+            if not data:
+                break
+            
+            now = time.time()
+            # 老大建议一：状态锁。如果上一轮响应已经完成了，这时再次检测到 client 写入，说明是长连接 Keep-Alive 下的一轮新交互
+            if not tracker.is_waiting_for_first_token:
+                tracker.reset_for_next_keepalive()
+                
+            tracker.last_client_write = now
+            tracker.total_client_bytes += len(data)
+            
+            dst_writer.write(data)
+            await dst_writer.drain()
+    except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError, asyncio.CancelledError):
+        # 预期内的 TCP 主动断开异常，静默处理，防止垃圾红字刷屏
+        pass
+    except Exception as exc:
+        profiler_logger.debug(f"[{tracker.request_id}] Client-to-remote error: {exc}")
+
+
+async def relay_remote_to_client(src_reader, dst_writer, tracker):
+    """从远程读取并转发到客户端（R ➔ C），精确测定 T4 首包延迟和 T5 流式耗时"""
+    try:
+        while True:
+            data = await src_reader.read(READ_SIZE)
+            if not data:
+                break
+            
+            now = time.time()
+            tracker.total_remote_bytes += len(data)
+            
+            if tracker.is_waiting_for_first_token:
+                tracker.first_remote_read = now
+                tracker.is_waiting_for_first_token = False
+                
+                # 计算 TTFT (T4)
+                if tracker.last_client_write is not None:
+                    t4 = now - tracker.last_client_write
+                else:
+                    t4 = now - tracker.t_start
+                    
+                if not tracker.t4_logged:
+                    profiler_logger.info(
+                        f"[{tracker.request_id}] T4 (TTFT - 云端首包思考耗时): {t4:.3f}s (Host: {tracker.host})"
+                    )
+                    tracker.t4_logged = True
+            
+            dst_writer.write(data)
+            await dst_writer.drain()
+    except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError, asyncio.CancelledError):
+        pass
+    except Exception as exc:
+        profiler_logger.debug(f"[{tracker.request_id}] Remote-to-client error: {exc}")
+
+
+
 async def connect_to(host, port, timeout=5):
     return await asyncio.wait_for(asyncio.open_connection(host, port), timeout)
 
@@ -266,90 +419,196 @@ def elapsed_ms(start_monotonic):
 
 # ── CONNECT (TLS tunnel) ──────────────────────────────────────────────
 
-async def connect_direct_tunnel(client_r, client_w, target):
+async def connect_direct_tunnel(client_r, client_w, target, tracker=None):
+    if tracker is None:
+        tracker = LatencyTracker(str(uuid.uuid4())[:8], target)
     host, _, port = target.rpartition(":")
-    connect_started = time.monotonic()
+    tracker.t_t1_end = time.time()
+    
+    connect_started = time.time()
     try:
         rmt_r, rmt_w = await connect_to(host, int(port))
     except Exception as exc:
-        connect_latency_ms = elapsed_ms(connect_started)
+        connect_latency_ms = int((time.time() - connect_started) * 1000)
         safe_write(client_w, b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
-        client_w.close()
+        try:
+            client_w.close()
+            await client_w.wait_closed()
+        except Exception:
+            pass
         return ForwardResult(
             success=False,
             connect_latency_ms=connect_latency_ms,
             error=str(exc),
         )
-    connect_latency_ms = elapsed_ms(connect_started)
+        
+    tracker.t_t2_end = time.time()
+    tracker.t_t3_end = time.time()
+    connect_latency_ms = int((time.time() - connect_started) * 1000)
+    
     safe_write(client_w, b"HTTP/1.1 200 Connection Established\r\n\r\n")
     await client_w.drain()
-    await asyncio.gather(relay(client_r, rmt_w), relay(rmt_r, client_w))
-    rmt_w.close()
+    
+    task_c2r = asyncio.create_task(relay_client_to_remote(client_r, rmt_w, tracker))
+    task_r2c = asyncio.create_task(relay_remote_to_client(rmt_r, client_w, tracker))
+    
+    try:
+        done, pending = await asyncio.wait(
+            [task_c2r, task_r2c],
+            return_when=asyncio.FIRST_COMPLETED
+        )
+    except Exception as exc:
+        profiler_logger.error(f"[{tracker.request_id}] Direct tunnel wait error: {exc}")
+    finally:
+        # 强切 Pending 任务
+        for t in [task_c2r, task_r2c]:
+            if not t.done():
+                t.cancel()
+        
+        # 物理多米诺骨牌彻底关闭，释放端口
+        try:
+            rmt_w.close()
+            await rmt_w.wait_closed()
+        except Exception:
+            pass
+        try:
+            client_w.close()
+            await client_w.wait_closed()
+        except Exception:
+            pass
+            
+    print_profiler_report(tracker)
     return ForwardResult(success=True, connect_latency_ms=connect_latency_ms)
 
 
-async def connect_via_proxy(client_r, client_w, target, upstream):
+async def connect_via_proxy(client_r, client_w, target, upstream, tracker=None):
+    if tracker is None:
+        tracker = LatencyTracker(str(uuid.uuid4())[:8], target)
     phost, pport = upstream
-    connect_started = time.monotonic()
+    tracker.t_t1_end = time.time()
+    
+    connect_started = time.time()
     try:
         pr, pw = await connect_to(phost, pport)
     except Exception as exc:
-        connect_latency_ms = elapsed_ms(connect_started)
+        connect_latency_ms = int((time.time() - connect_started) * 1000)
         safe_write(client_w, b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
-        client_w.close()
+        try:
+            client_w.close()
+            await client_w.wait_closed()
+        except Exception:
+            pass
         return ForwardResult(
             success=False,
             connect_latency_ms=connect_latency_ms,
             error=str(exc),
         )
+        
+    tracker.t_t2_end = time.time()
 
     pw.write(f"CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n".encode())
     await pw.drain()
+    
     try:
-        resp_line = await asyncio.wait_for(pr.readline(), timeout=5)
+        resp_line = await asyncio.wait_for(pr.readline(), timeout=10)
     except Exception as exc:
-        connect_latency_ms = elapsed_ms(connect_started)
+        connect_latency_ms = int((time.time() - connect_started) * 1000)
         safe_write(client_w, b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
-        client_w.close()
-        pw.close()
+        try:
+            client_w.close()
+            await client_w.wait_closed()
+        except Exception:
+            pass
+        try:
+            pw.close()
+            await pw.wait_closed()
+        except Exception:
+            pass
         return ForwardResult(
             success=False,
             connect_latency_ms=connect_latency_ms,
             error=str(exc),
         )
+        
     if not resp_line or b"200" not in resp_line:
-        connect_latency_ms = elapsed_ms(connect_started)
+        connect_latency_ms = int((time.time() - connect_started) * 1000)
         safe_write(client_w, b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
-        client_w.close()
-        pw.close()
+        try:
+            client_w.close()
+            await client_w.wait_closed()
+        except Exception:
+            pass
+        try:
+            pw.close()
+            await pw.wait_closed()
+        except Exception:
+            pass
         return ForwardResult(
             success=False,
             connect_latency_ms=connect_latency_ms,
             error=resp_line.decode("latin-1", errors="replace").strip()
             or "upstream CONNECT failed",
         )
-    # drain proxy response headers
+        
+    # 读取代理返回的响应头部，直至空行
     try:
         while True:
             line = await asyncio.wait_for(pr.readline(), timeout=5)
             if line in (b"\r\n", b"\n", b""):
                 break
     except Exception as exc:
-        connect_latency_ms = elapsed_ms(connect_started)
+        connect_latency_ms = int((time.time() - connect_started) * 1000)
         safe_write(client_w, b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
-        client_w.close()
-        pw.close()
+        try:
+            client_w.close()
+            await client_w.wait_closed()
+        except Exception:
+            pass
+        try:
+            pw.close()
+            await pw.wait_closed()
+        except Exception:
+            pass
         return ForwardResult(
             success=False,
             connect_latency_ms=connect_latency_ms,
             error=str(exc),
         )
-    connect_latency_ms = elapsed_ms(connect_started)
+        
+    tracker.t_t3_end = time.time()
+    connect_latency_ms = int((time.time() - connect_started) * 1000)
 
     safe_write(client_w, b"HTTP/1.1 200 Connection Established\r\n\r\n")
     await client_w.drain()
-    await asyncio.gather(relay(client_r, pw), relay(pr, client_w))
-    pw.close()
+    
+    # ── 双向协程启动与强切逻辑 ──
+    task_c2r = asyncio.create_task(relay_client_to_remote(client_r, pw, tracker))
+    task_r2c = asyncio.create_task(relay_remote_to_client(pr, client_w, tracker))
+    
+    try:
+        done, pending = await asyncio.wait(
+            [task_c2r, task_r2c],
+            return_when=asyncio.FIRST_COMPLETED
+        )
+    except Exception as exc:
+        profiler_logger.error(f"[{tracker.request_id}] CONNECT wait error: {exc}")
+    finally:
+        for t in [task_c2r, task_r2c]:
+            if not t.done():
+                t.cancel()
+                
+        try:
+            pw.close()
+            await pw.wait_closed()
+        except Exception:
+            pass
+        try:
+            client_w.close()
+            await client_w.wait_closed()
+        except Exception:
+            pass
+            
+    print_profiler_report(tracker)
     return ForwardResult(success=True, connect_latency_ms=connect_latency_ms)
 
 
@@ -520,6 +779,9 @@ async def _read_body(reader, request_bytes):
 async def handle(client_r, client_w):
     started_at = utc_now_iso()
     start_monotonic = time.monotonic()
+    request_id = str(uuid.uuid4())[:8]
+    tracker = LatencyTracker(request_id)
+    
     client_addr, client_port = get_client_peer(client_w)
     client_info = resolve_client_process(client_addr, client_port)
     upstream = proxy_cache.get()
@@ -614,6 +876,7 @@ async def handle(client_r, client_w):
 
     # extract host and check whitelist
     host = extract_host(target, first_line)
+    tracker.host = host or target
     force_direct = whitelist.match(host)
 
     if force_direct:
@@ -634,9 +897,15 @@ async def handle(client_r, client_w):
                 if line in (b"\r\n", b"\n", b""):
                     break
             if force_direct or not upstream:
-                result = await connect_direct_tunnel(client_r, client_w, target)
+                try:
+                    result = await connect_direct_tunnel(client_r, client_w, target, tracker)
+                except TypeError:
+                    result = await connect_direct_tunnel(client_r, client_w, target)
             else:
-                result = await connect_via_proxy(client_r, client_w, target, upstream)
+                try:
+                    result = await connect_via_proxy(client_r, client_w, target, upstream, tracker)
+                except TypeError:
+                    result = await connect_via_proxy(client_r, client_w, target, upstream)
         else:
             if force_direct or not upstream:
                 result = await http_direct(client_r, client_w, first_line)
@@ -692,6 +961,7 @@ async def main():
         status_provider=build_runtime_status,
         whitelist_provider=WhitelistProvider(whitelist, lambda: stats_store),
         doctor_provider=build_doctor_report,
+        provider_health_provider=build_provider_health_report,
     )
     log(f"listening {LISTEN_HOST}:{LISTEN_PORT}  |  mode: auto-detect Windows system proxy  |  cache: {CACHE_SEC}s")
     log(f"dashboard http://{DASHBOARD_HOST}:{DASHBOARD_PORT}")

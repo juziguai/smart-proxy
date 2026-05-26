@@ -45,6 +45,7 @@ def handle_stats_request(
     status_provider=None,
     whitelist_provider=None,
     doctor_provider=None,
+    provider_health_provider=None,
     request_body=b"",
 ):
     if method == "GET" and parsed_url.path in ("", "/"):
@@ -124,6 +125,11 @@ def handle_stats_request(
             return build_stats_response(200, {"checks": []})
         return build_stats_response(200, doctor_provider())
 
+    if method == "GET" and parsed_url.path == "/api/provider-health":
+        if provider_health_provider is None:
+            return build_stats_response(200, {"check": None})
+        return build_stats_response(200, provider_health_provider())
+
     if method == "POST" and parsed_url.path == "/api/clear-proxy-stats":
         stats_store.clear_proxy_stats()
         return build_stats_response(200, {"ok": True})
@@ -153,6 +159,7 @@ async def start_stats_server_with_status(
     status_provider=None,
     whitelist_provider=None,
     doctor_provider=None,
+    provider_health_provider=None,
 ):
     server = await asyncio.start_server(
         lambda reader, writer: _handle_client(
@@ -162,6 +169,7 @@ async def start_stats_server_with_status(
             status_provider,
             whitelist_provider,
             doctor_provider,
+            provider_health_provider,
         ),
         host,
         port,
@@ -176,6 +184,7 @@ async def _handle_client(
     status_provider=None,
     whitelist_provider=None,
     doctor_provider=None,
+    provider_health_provider=None,
 ):
     try:
         request_line = await asyncio.wait_for(reader.readline(), timeout=5)
@@ -211,6 +220,7 @@ async def _handle_client(
             status_provider=status_provider,
             whitelist_provider=whitelist_provider,
             doctor_provider=doctor_provider,
+            provider_health_provider=provider_health_provider,
             request_body=request_body,
         )
         reason = {

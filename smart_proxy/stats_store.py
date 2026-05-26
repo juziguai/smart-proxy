@@ -13,6 +13,8 @@ HOST_CRITICAL_FAILURE_RATE = 0.50
 MODEL_API_SLOW_ALERT_MIN_COUNT = 2
 DEVELOPER_SERVICE_SLOW_ALERT_MIN_COUNT = 10
 GENERIC_SLOW_ALERT_MIN_COUNT = 5
+UNKNOWN_HOST = "(unknown)"
+UNPARSED_ROUTE = "unparsed"
 
 MODEL_API_HOST_MARKERS = (
     "api.deepseek.com",
@@ -410,6 +412,7 @@ class StatsStore:
         where, params = self._time_window_clause("started_at", since, until)
         connect_latency_expr = self._connect_latency_expr()
         duration_expr = "COALESCE(duration_ms, latency_ms)"
+        alertable_request_expr = self._alertable_request_expr()
 
         with self._connection() as conn:
             row = conn.execute(
@@ -446,9 +449,9 @@ class StatsStore:
                     COALESCE(SUM(success), 0) AS successful_requests,
                     COALESCE(SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END), 0)
                         AS failed_requests,
-                    COALESCE(SUM(CASE WHEN success = 0 AND error IS NOT NULL AND error <> '' THEN 1 ELSE 0 END), 0)
+                    COALESCE(SUM(CASE WHEN success = 0 AND error IS NOT NULL AND error <> '' AND ({alertable_request_expr}) THEN 1 ELSE 0 END), 0)
                         AS alert_failed_requests,
-                    COALESCE(SUM(CASE WHEN {connect_latency_expr} >= ? THEN 1 ELSE 0 END), 0)
+                    COALESCE(SUM(CASE WHEN ({alertable_request_expr}) AND {connect_latency_expr} >= ? THEN 1 ELSE 0 END), 0)
                         AS slow_requests,
                     COALESCE(AVG({connect_latency_expr}), 0)
                         AS average_connect_latency_ms,
@@ -986,6 +989,14 @@ class StatsStore:
             "WHEN method <> 'CONNECT' THEN latency_ms "
             "ELSE NULL "
             "END"
+        )
+
+    def _alertable_request_expr(self):
+        return (
+            f"host <> '{UNKNOWN_HOST}' "
+            f"AND route <> '{UNPARSED_ROUTE}' "
+            "AND COALESCE(stage, 'completed') NOT IN "
+            "('client_closed', 'read_timeout', 'parse_failed')"
         )
 
     def _since_for_range(self, range_name, now):

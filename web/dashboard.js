@@ -4,6 +4,10 @@
     let draggedWidget = null;
     let refreshTimer = null;
     let whitelistEntriesState = [];
+    let doctorLoaded = false;
+    let doctorLoading = false;
+    let providerHealthLoaded = false;
+    let providerHealthLoading = false;
     const layoutStorageKey = 'smartProxyOverviewDashboardLayout.v1';
     const defaultLayout = ['alerts', 'kpis', 'trend', 'bottom'];
     const layoutRoot = document.getElementById('layoutRoot');
@@ -25,6 +29,12 @@
       tabPanels.forEach(panel => {
         panel.classList.toggle('active', panel.dataset.tabPanel === target);
       });
+      if (target === 'doctor' && !doctorLoaded) {
+        refreshDoctor();
+      }
+      if (target === 'providers' && !providerHealthLoaded) {
+        refreshProviderQuotaHealth();
+      }
     };
     const layoutWidgets = () => [...layoutRoot.querySelectorAll('[data-widget]')];
     const normalizeLayout = order => {
@@ -736,7 +746,8 @@
       }
     };
     const renderDoctor = doctor => {
-      const checks = doctor.checks || [];
+      const checks = (doctor.checks || [])
+        .filter(check => check.key !== 'provider_health');
       const okCount = checks.filter(check => check.status === 'ok').length;
       const generatedAt = doctor.generated_at ? new Date(doctor.generated_at).toLocaleString() : '刚刚';
       text('doctorMeta', `${okCount}/${checks.length} 项通过 · ${generatedAt}`);
@@ -756,9 +767,61 @@
         </div>
       `).join('');
     };
-    const refreshDoctor = async () => {
-      const response = await fetch('/api/doctor', { cache: 'no-store' });
-      renderDoctor(await response.json());
+    const refreshDoctor = async ({ force = false } = {}) => {
+      if (doctorLoading || (doctorLoaded && !force)) return;
+      doctorLoading = true;
+      try {
+        const response = await fetch('/api/doctor', { cache: 'no-store' });
+        renderDoctor(await response.json());
+        doctorLoaded = true;
+      } finally {
+        doctorLoading = false;
+      }
+    };
+    const renderProviderQuotaHealth = report => {
+      const container = document.getElementById('providerQuotaHealth');
+      if (!container) return;
+      const check = report?.check;
+      const generatedAt = report?.generated_at
+        ? new Date(report.generated_at).toLocaleString()
+        : '刚刚';
+      text('providerQuotaMeta', `服务商额度 / 限流状态 · ${generatedAt}`);
+      if (!check) {
+        container.innerHTML = '<div class="table-empty">暂无服务商健康数据</div>';
+        return;
+      }
+      const ok = check.status === 'ok';
+      container.innerHTML = `
+        <div class="doctor-item">
+          <div>
+            <strong>${escapeHtml(check.label || 'Provider quota / health')}</strong>
+            <span>${escapeHtml(check.detail || '-')}</span>
+            ${ok ? '' : `<span>${escapeHtml(check.fix || '请检查模型服务商额度或限流状态')}</span>`}
+          </div>
+          <span class="status-badge doctor-status ${ok ? 'ok' : 'warning'}">${ok ? '正常' : '关注'}</span>
+        </div>
+      `;
+    };
+    const providerHealthFromDoctor = doctor => ({
+      generated_at: doctor?.generated_at,
+      check: (doctor?.checks || [])
+        .find(check => check.key === 'provider_health') || null,
+    });
+    const fetchProviderHealthReport = async () => {
+      const response = await fetch('/api/provider-health', { cache: 'no-store' });
+      if (response.ok) return response.json();
+      const legacyResponse = await fetch('/api/doctor', { cache: 'no-store' });
+      return providerHealthFromDoctor(await legacyResponse.json());
+    };
+    const refreshProviderQuotaHealth = async ({ force = false } = {}) => {
+      if (providerHealthLoading || (providerHealthLoaded && !force)) return;
+      providerHealthLoading = true;
+      try {
+        renderProviderQuotaHealth(await fetchProviderHealthReport());
+        providerHealthLoaded = true;
+      } finally {
+        providerHealthLoading = false;
+      }
     };
     const renderModelFilter = models => {
       const filter = document.getElementById('modelFilter');
@@ -923,7 +986,7 @@
       updateShellStatus(runtimeData || {});
       renderModelFilter(u.models);
       renderTrendChart(trendData.points);
-      await Promise.allSettled([refreshWhitelist(), refreshDoctor()]);
+      await Promise.allSettled([refreshWhitelist()]);
       const refreshedAt = new Date().toLocaleTimeString();
       text('status', `最后刷新 ${refreshedAt}`);
       text('lastRefreshAt', `最后刷新 ${refreshedAt}`);
@@ -1016,5 +1079,12 @@
       }
     });
     document.getElementById('saveWhitelist').addEventListener('click', saveWhitelistEntries);
-    document.getElementById('runDoctor').addEventListener('click', refreshDoctor);
+    document.getElementById('runDoctor').addEventListener(
+      'click',
+      () => refreshDoctor({ force: true }),
+    );
+    document.getElementById('refreshProviderHealth').addEventListener(
+      'click',
+      () => refreshProviderQuotaHealth({ force: true }),
+    );
     scheduleRefresh();

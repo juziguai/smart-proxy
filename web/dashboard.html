@@ -169,6 +169,16 @@
     <section class="tab-panel" data-tab-panel="providers">
       <section class="details diagnostics">
         <div class="table">
+          <div class="table-head">
+            <div>
+              <h2>模型服务商状态</h2>
+              <p class="panel-intro" id="providerQuotaMeta">等待服务商健康数据...</p>
+            </div>
+            <button class="layout-action" id="refreshProviderHealth">重新检查</button>
+          </div>
+          <div id="providerQuotaHealth"></div>
+        </div>
+        <div class="table">
           <h2>代理状态</h2>
           <div class="runtime-list" id="runtimeStatus"></div>
         </div>
