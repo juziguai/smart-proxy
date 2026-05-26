@@ -132,6 +132,19 @@
             </div>
             <div class="model-filter" id="modelFilter"></div>
             <div id="trendChart" class="empty-chart">暂无趋势数据</div>
+            <div style="margin-top: 24px; border-top: 1px solid #e2e8f0; padding-top: 16px;">
+              <div class="trend-head" style="margin-bottom: 8px;">
+                <div>
+                  <h2 style="font-size: 15px; margin: 0; color: #1e293b;">网络链路时延剖析</h2>
+                  <p style="font-size: 11px; margin: 2px 0 0 0; color: #64748b;">建连时延 T3 (代表国际公网质量) 与总持续传输 T5 (代表数据转发性能) 趋势</p>
+                </div>
+                <div class="legend" style="font-size: 11px; display: flex; gap: 12px; margin-bottom: 0;">
+                  <span style="--dot: #536dff; display: inline-flex; align-items: center; gap: 4px; color: #475569;"><span style="display:inline-block; width:8px; height:8px; background:var(--dot); border-radius:50%"></span>建连 T3 (ms)</span>
+                  <span style="--dot: #8a5a44; display: inline-flex; align-items: center; gap: 4px; color: #475569;"><span style="display:inline-block; width:8px; height:8px; background:var(--dot); border-radius:50%"></span>总持续 T5 (ms)</span>
+                </div>
+              </div>
+              <div id="latencyChart" class="empty-chart">暂无时延趋势数据</div>
+            </div>
           </div>
           <section class="table provider-health-panel">
             <div class="table-head">

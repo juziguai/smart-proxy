@@ -280,7 +280,8 @@ class StatsStore:
                     SELECT
                         started_at,
                         success,
-                        {self._connect_latency_expr()} AS connect_latency_ms
+                        {self._connect_latency_expr()} AS connect_latency_ms,
+                        COALESCE(duration_ms, latency_ms) AS duration_ms
                     FROM proxy_requests
                     """,
                     "started_at",
@@ -299,6 +300,9 @@ class StatsStore:
             if row["connect_latency_ms"] is not None:
                 item["_latency_sum"] += int(row["connect_latency_ms"])
                 item["_latency_count"] += 1
+            if row["duration_ms"] is not None:
+                item["_duration_sum"] += int(row["duration_ms"])
+                item["_duration_count"] += 1
 
         for row in usage_rows:
             bucket = self._bucket_key(row["timestamp"], interval)
@@ -335,8 +339,14 @@ class StatsStore:
                     item["_latency_sum"] / item["_latency_count"]
                 )
                 item["average_connect_latency_ms"] = item["average_latency_ms"]
+            if item["_duration_count"]:
+                item["average_duration_ms"] = int(
+                    item["_duration_sum"] / item["_duration_count"]
+                )
             del item["_latency_sum"]
             del item["_latency_count"]
+            del item["_duration_sum"]
+            del item["_duration_count"]
             result.append(item)
 
         return {
@@ -1077,6 +1087,7 @@ class StatsStore:
                 "failed_requests": 0,
                 "average_latency_ms": 0,
                 "average_connect_latency_ms": 0,
+                "average_duration_ms": 0,
                 "input_tokens": 0,
                 "output_tokens": 0,
                 "total_tokens": 0,
@@ -1085,6 +1096,8 @@ class StatsStore:
                 "estimated_cost": 0.0,
                 "_latency_sum": 0,
                 "_latency_count": 0,
+                "_duration_sum": 0,
+                "_duration_count": 0,
             }
         return buckets[bucket]
 

@@ -600,12 +600,37 @@
         ['白名单文件', status.whitelist_path || '-'],
         ['加载时间', whitelistLoadedAt],
       ];
-      return items.map(([label, value]) => `
+      let baseHtml = items.map(([label, value]) => `
         <div class="runtime-item">
           <span>${escapeHtml(label)}</span>
           <strong>${escapeHtml(value)}</strong>
         </div>
       `).join('');
+      
+      // 追加：渲染实时智能路由分流状态
+      let adaptiveSection = '';
+      if (status.active_adaptive_routes && Object.keys(status.active_adaptive_routes).length > 0) {
+        const routeItems = Object.entries(status.active_adaptive_routes).map(([host, route]) => {
+          const isDemoted = route.status === 'DEMOTED';
+          const badgeClass = isDemoted ? 'warn' : 'good';
+          const label = isDemoted ? '⚠️ 自动走代理' : '⚡ 智能直连';
+          const desc = isDemoted ? '直连崩溃自愈中' : '代理拥堵升级中';
+          return `
+            <div class="runtime-item adaptive-route-item ${badgeClass}" style="border-left: 3px solid ${isDemoted ? '#f59e0b' : '#10b981'}; padding-left: 8px; margin-top: 6px; background: ${isDemoted ? '#fffbeb' : '#ecfdf5'};">
+              <span style="font-weight: 600; color: #1f2937; max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(host)}">${escapeHtml(host)}</span>
+              <strong>
+                <span class="status-badge ${badgeClass}" style="font-size: 10px; padding: 2px 6px;">${label}</span>
+                <span style="font-size:10px; color:#6b7280; margin-left:4px; font-weight:normal;">${desc} (${route.expires_in}s)</span>
+              </strong>
+            </div>
+          `;
+        }).join('');
+        adaptiveSection = `
+          <div class="runtime-section-title" style="margin-top:20px; margin-bottom:8px; font-size:12px; color:#64748b; font-weight:bold; border-bottom:1px dashed #e2e8f0; padding-bottom:4px;">实时智能分流状态</div>
+          ${routeItems}
+        `;
+      }
+      return baseHtml + adaptiveSection;
     };
     const updateShellStatus = status => {
       const proxyChip = document.getElementById('proxyChip');
@@ -884,6 +909,7 @@
           failed_requests: 0,
           average_latency_ms: 0,
           average_connect_latency_ms: 0,
+          average_duration_ms: 0,
           input_tokens: 0,
           output_tokens: 0,
           total_tokens: 0,
@@ -929,6 +955,40 @@
           <text x="${width - pad}" y="${height - 6}" text-anchor="end" fill="#66738a" font-size="13" font-weight="700">${escapeHtml(last)}</text>
           <text x="${pad}" y="18" fill="#137f6d" font-size="13" font-weight="800">Token ${compactNumber(maxTokens)}</text>
           <text x="${width - pad}" y="18" text-anchor="end" fill="#d92d3a" font-size="13" font-weight="800">费用 ${money(maxCost)}</text>
+        </svg>
+      `;
+    };
+
+    const renderLatencyChart = points => {
+      const chart = document.getElementById('latencyChart');
+      if (!points.length) {
+        chart.className = 'empty-chart';
+        chart.innerHTML = '暂无时延趋势数据';
+        return;
+      }
+      const chartPoints = normalizeTrendPoints(points);
+      chart.className = 'chart';
+      const width = 960;
+      const height = 220;
+      const pad = 28;
+      const maxLatency = Math.max(
+        ...chartPoints.map(point => Math.max(point.average_connect_latency_ms || 0, point.average_duration_ms || 0)),
+        100
+      );
+      const connectPath = linePath(chartPoints, 'average_connect_latency_ms', width, height, pad, maxLatency);
+      const durationPath = linePath(chartPoints, 'average_duration_ms', width, height, pad, maxLatency);
+      const first = trendLabel(chartPoints[0].bucket);
+      const last = trendLabel(chartPoints[chartPoints.length - 1].bucket);
+      chart.innerHTML = `
+        <svg viewBox="0 0 ${width} ${height}" width="100%" height="220" role="img" aria-label="latency trends">
+          <line x1="${pad}" y1="${height - pad}" x2="${width - pad}" y2="${height - pad}" stroke="#d7e0ef"/>
+          <line x1="${pad}" y1="${pad}" x2="${pad}" y2="${height - pad}" stroke="#d7e0ef"/>
+          <path d="${connectPath}" fill="none" stroke="#536dff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="${durationPath}" fill="none" stroke="#8a5a44" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+          <text x="${pad}" y="${height - 6}" fill="#66738a" font-size="13" font-weight="700">${escapeHtml(first)}</text>
+          <text x="${width - pad}" y="${height - 6}" text-anchor="end" fill="#66738a" font-size="13" font-weight="700">${escapeHtml(last)}</text>
+          <text x="${pad}" y="18" fill="#536dff" font-size="13" font-weight="800">最大建连(T3) ${maxLatency}ms</text>
+          <text x="${width - pad}" y="18" text-anchor="end" fill="#8a5a44" font-size="13" font-weight="800">最大持续(T5) ${maxLatency}ms</text>
         </svg>
       `;
     };
@@ -986,6 +1046,7 @@
       updateShellStatus(runtimeData || {});
       renderModelFilter(u.models);
       renderTrendChart(trendData.points);
+      renderLatencyChart(trendData.points);
       await Promise.allSettled([refreshWhitelist()]);
       const refreshedAt = new Date().toLocaleTimeString();
       text('status', `最后刷新 ${refreshedAt}`);
