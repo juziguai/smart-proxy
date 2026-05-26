@@ -11,7 +11,7 @@ import sys
 import time
 import uuid
 
-from smart_proxy.logger import profiler_logger
+from smart_proxy.logger import profiler_logger, start_async_logging_listener, shutdown_async_logging
 
 class LatencyTracker:
     """全链路高精度分层耗时与流量统计追踪器"""
@@ -1002,45 +1002,32 @@ async def main():
     global stats_store
     stats_store = StatsStore(STATS_DB_FILE)
     
-    # 1. 尝试拉起 8889 代理端口，带自愈重试
+    # 启动异步日志缓冲消费中台
+    start_async_logging_listener()
+    
     server = None
-    try:
-        server = await asyncio.start_server(handle, LISTEN_HOST, LISTEN_PORT)
-    except OSError as exc:
-        if exc.errno == 10048 or "already in use" in str(exc).lower():
-            msg = f"[Port-Heal] 代理服务端口 {LISTEN_PORT} 被占用。触发自愈清理..."
-            log(msg)
-            profiler_logger.info(msg)
-            kill_process_by_port(LISTEN_PORT)
-            await asyncio.sleep(0.5)  # 缓冲给操作系统释放句柄
-            # 第二次重试
-            server = await asyncio.start_server(handle, LISTEN_HOST, LISTEN_PORT)
-            msg = f"[Port-Heal] 代理服务端口 {LISTEN_PORT} 自愈绑定成功！"
-            log(msg)
-            profiler_logger.info(msg)
-        else:
-            raise
-
-    # 2. 尝试拉起 8890 状态/Dashboard 端口，带自愈重试
     dashboard = None
     try:
-        dashboard = await start_stats_server_with_status(
-            stats_store,
-            DASHBOARD_HOST,
-            DASHBOARD_PORT,
-            status_provider=build_runtime_status,
-            whitelist_provider=WhitelistProvider(whitelist, lambda: stats_store),
-            doctor_provider=build_doctor_report,
-            provider_health_provider=build_provider_health_report,
-        )
-    except OSError as exc:
-        if exc.errno == 10048 or "already in use" in str(exc).lower():
-            msg = f"[Port-Heal] Dashboard服务端口 {DASHBOARD_PORT} 被占用。触发自愈清理..."
-            log(msg)
-            profiler_logger.info(msg)
-            kill_process_by_port(DASHBOARD_PORT)
-            await asyncio.sleep(0.5)
-            # 第二次重试
+        # 1. 尝试拉起 8889 代理端口，带自愈重试
+        try:
+            server = await asyncio.start_server(handle, LISTEN_HOST, LISTEN_PORT)
+        except OSError as exc:
+            if exc.errno == 10048 or "already in use" in str(exc).lower():
+                msg = f"[Port-Heal] 代理服务端口 {LISTEN_PORT} 被占用。触发自愈清理..."
+                log(msg)
+                profiler_logger.info(msg)
+                kill_process_by_port(LISTEN_PORT)
+                await asyncio.sleep(0.5)  # 缓冲给操作系统释放句柄
+                # 第二次重试
+                server = await asyncio.start_server(handle, LISTEN_HOST, LISTEN_PORT)
+                msg = f"[Port-Heal] 代理服务端口 {LISTEN_PORT} 自愈绑定成功！"
+                log(msg)
+                profiler_logger.info(msg)
+            else:
+                raise
+
+        # 2. 尝试拉起 8890 状态/Dashboard 端口，带自愈重试
+        try:
             dashboard = await start_stats_server_with_status(
                 stats_store,
                 DASHBOARD_HOST,
@@ -1050,23 +1037,43 @@ async def main():
                 doctor_provider=build_doctor_report,
                 provider_health_provider=build_provider_health_report,
             )
-            msg = f"[Port-Heal] Dashboard服务端口 {DASHBOARD_PORT} 自愈绑定成功！"
-            log(msg)
-            profiler_logger.info(msg)
-        else:
+        except OSError as exc:
+            if exc.errno == 10048 or "already in use" in str(exc).lower():
+                msg = f"[Port-Heal] Dashboard服务端口 {DASHBOARD_PORT} 被占用。触发自愈清理..."
+                log(msg)
+                profiler_logger.info(msg)
+                kill_process_by_port(DASHBOARD_PORT)
+                await asyncio.sleep(0.5)
+                # 第二次重试
+                dashboard = await start_stats_server_with_status(
+                    stats_store,
+                    DASHBOARD_HOST,
+                    DASHBOARD_PORT,
+                    status_provider=build_runtime_status,
+                    whitelist_provider=WhitelistProvider(whitelist, lambda: stats_store),
+                    doctor_provider=build_doctor_report,
+                    provider_health_provider=build_provider_health_report,
+                )
+                msg = f"[Port-Heal] Dashboard服务端口 {DASHBOARD_PORT} 自愈绑定成功！"
+                log(msg)
+                profiler_logger.info(msg)
+            else:
+                if server:
+                    server.close()
+                raise
+        except Exception:
             if server:
                 server.close()
             raise
-    except Exception:
-        if server:
-            server.close()
-        raise
 
-    log(f"listening {LISTEN_HOST}:{LISTEN_PORT}  |  mode: auto-detect Windows system proxy  |  cache: {CACHE_SEC}s")
-    log(f"dashboard http://{DASHBOARD_HOST}:{DASHBOARD_PORT}")
-    asyncio.create_task(run_usage_ingestion_loop(stats_store, log=log))
-    async with server, dashboard:
-        await asyncio.gather(server.serve_forever(), dashboard.serve_forever())
+        log(f"listening {LISTEN_HOST}:{LISTEN_PORT}  |  mode: auto-detect Windows system proxy  |  cache: {CACHE_SEC}s")
+        log(f"dashboard http://{DASHBOARD_HOST}:{DASHBOARD_PORT}")
+        asyncio.create_task(run_usage_ingestion_loop(stats_store, log=log))
+        async with server, dashboard:
+            await asyncio.gather(server.serve_forever(), dashboard.serve_forever())
+    finally:
+        # 3. 优雅退出：冲刷剩余未写入磁盘的日志并关闭线程池
+        await shutdown_async_logging()
 
 
 def cli():
