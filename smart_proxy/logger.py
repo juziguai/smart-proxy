@@ -55,6 +55,10 @@ class AsyncDailyRotatingFileHandler(logging.Handler):
         # 底层使用同步 DailyRotatingFileHandler 负责实际写盘和滚动
         self.underlying_handler = DailyRotatingFileHandler(logs_dir, backup_count)
         
+    def setFormatter(self, formatter):
+        super().setFormatter(formatter)
+        self.underlying_handler.setFormatter(formatter)
+        
     def emit(self, record):
         global _log_queue
         # 必须确保在 asyncio Event Loop 运行且队列已拉起场景下投递
@@ -136,7 +140,7 @@ def setup_profiler_logger():
         
         # 1. 采用零阻塞异步 Handler 替代传统的同步 FileHandler
         async_handler = AsyncDailyRotatingFileHandler(logs_dir, backup_count=7)
-        formatter = logging.Formatter("[sp_profiler %(asctime)s] %(message)s", datefmt="%H:%M:%S")
+        formatter = logging.Formatter("[sp_profiler %(asctime)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
         async_handler.setFormatter(formatter)
         logger.addHandler(async_handler)
         
