@@ -237,8 +237,9 @@
     </section>
 
     <section class="tab-panel" data-tab-panel="whitelist">
-      <section class="split-panels">
-        <div class="table">
+      <section class="split-panels-three">
+        <!-- 第一栏：白名单 -->
+        <div class="table scrollable-panel">
           <h2>白名单（直连）</h2>
           <p class="panel-intro" id="whitelistMeta">正在读取 whitelist.txt...</p>
           <div class="toolbar-row">
@@ -249,16 +250,11 @@
           <div class="feedback info" id="whitelistFeedback" role="status" aria-live="polite"></div>
           <div class="entry-list" id="whitelistEntries"></div>
         </div>
-        <div class="table">
-          <h2>候选 Host 分析</h2>
-          <p class="panel-intro">这些 Host 经常走代理，可结合延迟和业务重要性决定是否加入白名单直连。</p>
-          <div class="entry-list" id="whitelistCandidates"></div>
-        </div>
-      </section>
-      <section class="split-panels" style="margin-top: 16px;">
-        <div class="table">
+
+        <!-- 第二栏：屏蔽名单 -->
+        <div class="table scrollable-panel">
           <h2>屏蔽名单（快速拒绝）</h2>
-          <p class="panel-intro" id="blocklistMeta">正在读取 blocklist.txt... 命中域名立即关闭连接，耗时 &lt;1ms，不计入失败率。</p>
+          <p class="panel-intro" id="blocklistMeta">正在读取 blocklist.txt...</p>
           <div class="toolbar-row">
             <input class="text-input" id="blocklistInput" placeholder="例如 *.gvt2.com 或 telemetry.example.com" aria-label="新增屏蔽条目">
             <button class="primary-action" id="addBlocklistEntry">添加</button>
@@ -267,14 +263,24 @@
           <div class="feedback info" id="blocklistFeedback" role="status" aria-live="polite"></div>
           <div class="entry-list" id="blocklistEntries"></div>
         </div>
-        <div class="table">
-          <h2>屏蔽说明</h2>
-          <p class="panel-intro">屏蔽名单优先级高于白名单。支持 glob 通配符（<code>*</code>）。<br>适合用于：遥测/Beacon 域名、广告追踪、不希望消耗代理资源的域名。</p>
-          <div style="padding: 12px; background: var(--bg-secondary, #f8f9fa); border-radius: 8px; font-size: 13px; color: var(--text-secondary, #64748b); line-height: 1.7;">
-            <div>📡 <strong>已预置</strong>：Google Chrome、腾讯、字节跳动、微软遥测域名</div>
-            <div>⚡ <strong>响应时间</strong>：&lt;1ms（立即关闭，不等超时）</div>
-            <div>📊 <strong>统计</strong>：单独计数，不影响成功率</div>
-            <div>🔄 <strong>热更新</strong>：保存后 60 秒内自动生效，无需重启</div>
+
+        <!-- 第三栏：候选 Host + 屏蔽说明 -->
+        <div style="display: flex; flex-direction: column; gap: 16px;">
+          <!-- 候选 Host -->
+          <div class="table scrollable-panel" style="height: 380px;">
+            <h2>候选 Host 列表</h2>
+            <p class="panel-intro" style="margin-bottom: 8px;">常走代理且慢建连较多的直连候选 Host。</p>
+            <div class="entry-list" id="whitelistCandidates"></div>
+          </div>
+          <!-- 屏蔽说明 -->
+          <div class="table" style="flex: 1; min-height: 200px; display: flex; flex-direction: column;">
+            <h2>访问控制与屏蔽说明</h2>
+            <div style="padding: 12px; background: var(--wash, #f8f9fa); border-radius: 8px; font-size: 13px; color: var(--muted, #64748b); line-height: 1.7; flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 6px;">
+              <div>📡 <strong>屏蔽优先级</strong>：屏蔽名单优先级高于白名单，支持 <code>*</code> 通配符。</div>
+              <div>⚡ <strong>响应时间</strong>：&lt;1ms（极速拒绝，直接释放 TCP 句柄，省电省带宽）。</div>
+              <div>📊 <strong>统计指标</strong>：单独隔离记账，不影响常规成功率统计。</div>
+              <div>🔄 <strong>规则生效</strong>：保存后 60 秒内后台自动热加载，无需重启服务。</div>
+            </div>
           </div>
         </div>
       </section>

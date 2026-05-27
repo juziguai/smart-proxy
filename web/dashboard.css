@@ -634,6 +634,32 @@
       grid-template-columns: minmax(320px, 0.9fr) minmax(420px, 1.1fr);
       gap: 16px;
     }
+    .split-panels-three {
+      display: grid;
+      grid-template-columns: minmax(280px, 1fr) minmax(280px, 1fr) minmax(320px, 1.2fr);
+      gap: 16px;
+    }
+    .scrollable-panel {
+      height: 680px;
+      display: flex;
+      flex-direction: column;
+    }
+    .scrollable-panel .entry-list {
+      flex: 1;
+      overflow-y: auto;
+      padding-right: 6px;
+      margin-top: 10px;
+    }
+    .scrollable-panel .entry-list::-webkit-scrollbar {
+      width: 6px;
+    }
+    .scrollable-panel .entry-list::-webkit-scrollbar-thumb {
+      background: var(--line, #e2e8f0);
+      border-radius: 999px;
+    }
+    .scrollable-panel .entry-list::-webkit-scrollbar-track {
+      background: transparent;
+    }
     .entry-list,
     .doctor-list {
       display: grid;
@@ -673,6 +699,18 @@
       border-radius: 999px;
       background: #ffe4e8;
       color: var(--red);
+      cursor: pointer;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 950;
+      padding: 6px 10px;
+      white-space: nowrap;
+    }
+    .mini-primary {
+      border: 0;
+      border-radius: 999px;
+      background: #eaf1ff;
+      color: var(--blue);
       cursor: pointer;
       font: inherit;
       font-size: 12px;
@@ -1196,6 +1234,8 @@
       .shell-status { justify-content: flex-start; }
       .alerts-panel { grid-template-columns: 1fr; }
       .split-panels { grid-template-columns: 1fr; }
+      .split-panels-three { grid-template-columns: 1fr; }
+      .scrollable-panel { height: auto; }
       .runtime-item, .host-row, .request-row { grid-template-columns: 1fr; }
       .anomaly-card { grid-template-columns: 1fr; }
       .request-time { white-space: normal; }

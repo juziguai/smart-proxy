@@ -650,25 +650,31 @@
       feedback.textContent = message;
       feedback.className = `feedback show ${type}`;
     };
-    const renderWhitelistEntries = () => {
+    const renderWhitelistEntries = (filterKeyword = '') => {
       const container = document.getElementById('whitelistEntries');
-      if (!whitelistEntriesState.length) {
-        container.innerHTML = '<div class="table-empty">白名单为空，保存后会自动创建 whitelist.txt</div>';
+      const kw = String(filterKeyword).trim().toLowerCase();
+      const filtered = kw 
+        ? whitelistEntriesState.filter(entry => entry.toLowerCase().includes(kw))
+        : whitelistEntriesState;
+      if (!filtered.length) {
+        container.innerHTML = kw 
+          ? '<div class="table-empty">无匹配规则</div>'
+          : '<div class="table-empty">白名单为空，保存后会自动创建 whitelist.txt</div>';
         return;
       }
-      container.innerHTML = whitelistEntriesState.map(entry => `
-        <div class="entry-item">
-          <div>
-            <strong>${escapeHtml(entry)}</strong>
-            <span>${entry.includes('*') ? '通配规则' : '精确 Host'}</span>
+      container.innerHTML = filtered.map(entry => `
+        <div class="entry-item" style="display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-top: 1px solid #edf1f7;">
+          <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
+            <strong style="font-size: 13px; font-weight: 800; color: #07172f; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(entry)}">${escapeHtml(entry)}</strong>
+            <span class="status-badge" style="font-size: 10px; padding: 2px 6px; font-weight: normal; margin-top: 0; background: ${entry.includes('*') ? '#e8f5e9' : '#f3f4f6'}; color: ${entry.includes('*') ? '#2e7d32' : '#4b5563'}; border-radius: 4px;">${entry.includes('*') ? '通配' : '精确'}</span>
           </div>
-          <button class="mini-danger" data-remove-whitelist="${escapeHtml(entry)}">删除</button>
+          <button class="mini-danger" data-remove-whitelist="${escapeHtml(entry)}" style="padding: 3px 8px; font-size: 11px;">删除</button>
         </div>
       `).join('');
       container.querySelectorAll('[data-remove-whitelist]').forEach(button => {
         button.addEventListener('click', () => {
           whitelistEntriesState = whitelistEntriesState.filter(entry => entry !== button.dataset.removeWhitelist);
-          renderWhitelistEntries();
+          renderWhitelistEntries(document.getElementById('whitelistInput').value);
         });
       });
     };
@@ -686,27 +692,59 @@
           : pattern.toLowerCase() === value.toLowerCase();
       });
     };
+    const blocklistMatchesHost = host => {
+      const value = String(host || '').trim();
+      if (!value) return false;
+      return blocklistEntriesState.some(entry => {
+        const pattern = String(entry || '').trim();
+        if (!pattern) return false;
+        return pattern.includes('*')
+          ? wildcardToRegex(pattern).test(value)
+          : pattern.toLowerCase() === value.toLowerCase();
+      });
+    };
     const renderWhitelistCandidates = candidates => {
       const container = document.getElementById('whitelistCandidates');
       if (!candidates.length) {
         container.innerHTML = '<div class="table-empty">暂无候选 Host</div>';
         return;
       }
-      container.innerHTML = candidates.map(candidate => `
-        <div class="candidate-item">
-          <div>
-            <strong>${escapeHtml(candidate.host || '-')}</strong>
-            <span>代理 ${fmt.format(candidate.proxy_requests || 0)} 次 · 慢建连 ${fmt.format(candidate.slow_requests || 0)} · 平均 ${fmt.format(candidate.average_connect_latency_ms || 0)}ms</span>
+      container.innerHTML = candidates.map(candidate => {
+        const host = candidate.host || '';
+        let actionButtons = '';
+        if (whitelistMatchesHost(host)) {
+          actionButtons = `<button class="secondary-action" disabled style="padding: 5px 10px; font-size: 12px;">已直连</button>`;
+        } else if (blocklistMatchesHost(host)) {
+          actionButtons = `<button class="secondary-action" disabled style="padding: 5px 10px; font-size: 12px; color: #a855f7; border-color: #e9d5ff; background: #faf5ff;">已屏蔽</button>`;
+        } else {
+          actionButtons = `
+            <div style="display: flex; gap: 4px;">
+              <button class="mini-primary" data-add-whitelist-candidate="${escapeHtml(host)}" style="padding: 5px 10px; font-size: 12px;">直连</button>
+              <button class="mini-danger" data-add-blocklist-candidate="${escapeHtml(host)}" style="padding: 5px 10px; font-size: 12px; background: #faf5ff; border: 1px solid #e9d5ff; color: #7c3aed;">屏蔽</button>
+            </div>
+          `;
+        }
+        return `
+          <div class="candidate-item" style="padding: 8px 0; border-top: 1px solid #edf1f7;">
+            <div>
+              <strong style="font-size: 13px; font-weight: 800; color: #07172f;">${escapeHtml(host || '-')}</strong>
+              <span style="font-size: 11px;">代理 ${fmt.format(candidate.proxy_requests || 0)} 次 · 慢建连 ${fmt.format(candidate.slow_requests || 0)} · 平均 ${fmt.format(candidate.average_connect_latency_ms || 0)}ms</span>
+            </div>
+            ${actionButtons}
           </div>
-          ${whitelistMatchesHost(candidate.host)
-            ? `<button class="secondary-action" disabled data-add-candidate="${escapeHtml(candidate.host || '')}">已加入</button>`
-            : `<button class="secondary-action" data-add-candidate="${escapeHtml(candidate.host || '')}">加入</button>`}
-        </div>
-      `).join('');
-      container.querySelectorAll('[data-add-candidate]').forEach(button => {
+        `;
+      }).join('');
+      
+      container.querySelectorAll('[data-add-whitelist-candidate]').forEach(button => {
         button.addEventListener('click', async () => {
           if (button.disabled) return;
-          await addWhitelistCandidate(button.dataset.addCandidate, button);
+          await addWhitelistCandidate(button.dataset.addWhitelistCandidate, button);
+        });
+      });
+      container.querySelectorAll('[data-add-blocklist-candidate]').forEach(button => {
+        button.addEventListener('click', async () => {
+          if (button.disabled) return;
+          await addBlocklistCandidate(button.dataset.addBlocklistCandidate, button);
         });
       });
     };
@@ -716,7 +754,7 @@
       whitelistEntriesState = data.entries || [];
       const loadedAt = data.loaded_at ? new Date(data.loaded_at).toLocaleString() : '尚未加载';
       text('whitelistMeta', `${data.path || 'whitelist.txt'} · ${fmt.format(data.count || 0)} 条 · ${loadedAt}`);
-      renderWhitelistEntries();
+      renderWhitelistEntries(document.getElementById('whitelistInput').value);
       renderWhitelistCandidates(data.candidates || []);
     };
     const addWhitelistEntry = entry => {
@@ -776,25 +814,31 @@
       feedback.textContent = message;
       feedback.className = `feedback show ${type}`;
     };
-    const renderBlocklistEntries = () => {
+    const renderBlocklistEntries = (filterKeyword = '') => {
       const container = document.getElementById('blocklistEntries');
-      if (!blocklistEntriesState.length) {
-        container.innerHTML = '<div class="table-empty">屏蔽名单为空，保存后会自动创建 blocklist.txt</div>';
+      const kw = String(filterKeyword).trim().toLowerCase();
+      const filtered = kw 
+        ? blocklistEntriesState.filter(entry => entry.toLowerCase().includes(kw))
+        : blocklistEntriesState;
+      if (!filtered.length) {
+        container.innerHTML = kw
+          ? '<div class="table-empty">无匹配规则</div>'
+          : '<div class="table-empty">屏蔽名单为空，保存后会自动创建 blocklist.txt</div>';
         return;
       }
-      container.innerHTML = blocklistEntriesState.map(entry => `
-        <div class="entry-item">
-          <div>
-            <strong>${escapeHtml(entry)}</strong>
-            <span>${entry.includes('*') ? '通配规则' : '精确 Host'}</span>
+      container.innerHTML = filtered.map(entry => `
+        <div class="entry-item" style="display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-top: 1px solid #edf1f7;">
+          <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
+            <strong style="font-size: 13px; font-weight: 800; color: #07172f; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(entry)}">${escapeHtml(entry)}</strong>
+            <span class="status-badge" style="font-size: 10px; padding: 2px 6px; font-weight: normal; margin-top: 0; background: ${entry.includes('*') ? '#e8f5e9' : '#f3f4f6'}; color: ${entry.includes('*') ? '#2e7d32' : '#4b5563'}; border-radius: 4px;">${entry.includes('*') ? '通配' : '精确'}</span>
           </div>
-          <button class="mini-danger" data-remove-blocklist="${escapeHtml(entry)}">删除</button>
+          <button class="mini-danger" data-remove-blocklist="${escapeHtml(entry)}" style="padding: 3px 8px; font-size: 11px;">删除</button>
         </div>
       `).join('');
       container.querySelectorAll('[data-remove-blocklist]').forEach(button => {
         button.addEventListener('click', () => {
           blocklistEntriesState = blocklistEntriesState.filter(entry => entry !== button.dataset.removeBlocklist);
-          renderBlocklistEntries();
+          renderBlocklistEntries(document.getElementById('blocklistInput').value);
         });
       });
     };
@@ -804,7 +848,40 @@
       blocklistEntriesState = data.entries || [];
       const loadedAt = data.loaded_at ? new Date(data.loaded_at).toLocaleString() : '尚未加载';
       text('blocklistMeta', `${data.path || 'blocklist.txt'} · ${fmt.format(data.count || 0)} 条 · ${loadedAt}`);
-      renderBlocklistEntries();
+      renderBlocklistEntries(document.getElementById('blocklistInput').value);
+    };
+    const addBlocklistCandidate = async (entry, button) => {
+      const value = String(entry || '').trim();
+      if (!value) return;
+      if (blocklistEntriesState.includes(value)) {
+        showBlocklistFeedback(`${value} 已在屏蔽名单中`, 'info');
+        if (button) button.textContent = '已屏蔽';
+        return;
+      }
+      blocklistEntriesState = [...blocklistEntriesState, value].sort();
+      renderBlocklistEntries(document.getElementById('blocklistInput').value);
+      if (button) {
+        button.disabled = true;
+        button.textContent = '屏蔽中';
+      }
+      try {
+        await saveBlocklistEntries(`${value} 已加入屏蔽名单并保存`);
+        if (button) {
+          button.disabled = true;
+          button.textContent = '已屏蔽';
+          button.style.color = '#a855f7';
+          button.style.borderColor = '#e9d5ff';
+          button.style.background = '#faf5ff';
+        }
+      } catch (error) {
+        showBlocklistFeedback(`${value} 屏蔽失败：${error.message || error}`, 'error');
+        blocklistEntriesState = blocklistEntriesState.filter(item => item !== value);
+        renderBlocklistEntries(document.getElementById('blocklistInput').value);
+        if (button) {
+          button.disabled = false;
+          button.textContent = '屏蔽';
+        }
+      }
     };
     const addBlocklistEntry = entry => {
       const value = String(entry || '').trim();
@@ -1202,6 +1279,9 @@
       }
     });
     document.getElementById('saveWhitelist').addEventListener('click', saveWhitelistEntries);
+    document.getElementById('whitelistInput').addEventListener('input', event => {
+      renderWhitelistEntries(event.target.value);
+    });
     document.getElementById('addBlocklistEntry').addEventListener('click', () => {
       addBlocklistEntry(document.getElementById('blocklistInput').value);
       showBlocklistFeedback('已加入本地列表，点击保存后写入 blocklist.txt', 'info');
@@ -1211,6 +1291,9 @@
         addBlocklistEntry(event.target.value);
         showBlocklistFeedback('已加入本地列表，点击保存后写入 blocklist.txt', 'info');
       }
+    });
+    document.getElementById('blocklistInput').addEventListener('input', event => {
+      renderBlocklistEntries(event.target.value);
     });
     document.getElementById('saveBlocklist').addEventListener('click', () => {
       saveBlocklistEntries();
