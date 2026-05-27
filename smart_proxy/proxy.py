@@ -11,6 +11,8 @@ import sys
 import time
 import uuid
 
+START_TIME = time.time()
+
 from smart_proxy.logger import profiler_logger, start_async_logging_listener, shutdown_async_logging
 
 class LatencyTracker:
@@ -88,6 +90,116 @@ whitelist = Whitelist(WHITELIST_FILE, WHITELIST_RELOAD_SEC)
 blocklist = Blocklist(BLOCKLIST_FILE, BLOCKLIST_RELOAD_SEC)
 
 
+def _get_self_memory_win():
+    if sys.platform != "win32":
+        return 0
+    try:
+        import ctypes
+        from ctypes import wintypes
+        
+        class PROCESS_MEMORY_COUNTERS(ctypes.Structure):
+            _fields_ = [
+                ('cb', wintypes.DWORD),
+                ('PageFaultCount', wintypes.DWORD),
+                ('PeakWorkingSetSize', ctypes.c_size_t),
+                ('WorkingSetSize', ctypes.c_size_t),
+                ('QuotaPeakWorkingSetSize', ctypes.c_size_t),
+                ('QuotaWorkingSetSize', ctypes.c_size_t),
+                ('QuotaPeakPagedPoolSize', ctypes.c_size_t),
+                ('QuotaPagedPoolSize', ctypes.c_size_t),
+                ('PeakPagefileUsage', ctypes.c_size_t),
+                ('PagefileUsage', ctypes.c_size_t),
+            ]
+            
+        GetProcessMemoryInfo = ctypes.windll.psapi.GetProcessMemoryInfo
+        GetCurrentProcess = ctypes.windll.kernel32.GetCurrentProcess
+        
+        process_handle = GetCurrentProcess()
+        counters = PROCESS_MEMORY_COUNTERS()
+        counters.cb = ctypes.sizeof(PROCESS_MEMORY_COUNTERS)
+        
+        if GetProcessMemoryInfo(process_handle, ctypes.byref(counters), counters.cb):
+            return counters.WorkingSetSize
+    except Exception:
+        pass
+    return 0
+
+
+async def _probe_link_async(host, port, use_proxy=False):
+    """
+    高保真链路异步探测探针：
+    - use_proxy=True 时，若有上游代理开启，通过发送 CONNECT 代理协议实现高保真握手与全链路延迟测速。
+    - use_proxy=False 时执行国内直连 TCP 握手。
+    - 返回 (status_ok, elapsed_ms, error_msg)
+    """
+    upstream = proxy_cache.get()
+    started = time.monotonic()
+    
+    try:
+        if use_proxy and upstream:
+            # 1. 异步建连到本地上游代理 (mihomo)
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(upstream[0], upstream[1]),
+                timeout=1.5
+            )
+            # 2. 发送 CONNECT 报文打通隧道
+            connect_req = f"CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n"
+            writer.write(connect_req.encode("latin-1"))
+            await writer.drain()
+            
+            # 3. 读取响应首行
+            resp_line = await reader.readline()
+            if b"200" not in resp_line:
+                writer.close()
+                await writer.wait_closed()
+                return False, elapsed_ms(started), f"代理连接失败: {resp_line.decode().strip()}"
+                
+            # 4. 冲刷完 HTTP 响应头部
+            while True:
+                line = await reader.readline()
+                if line in (b"\r\n", b"\n", b""):
+                    break
+                    
+            writer.close()
+            await writer.wait_closed()
+            return True, elapsed_ms(started), ""
+        else:
+            # 5. 国内直连探测
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(host, port),
+                timeout=1.5
+            )
+            writer.close()
+            await writer.wait_closed()
+            return True, elapsed_ms(started), ""
+            
+    except asyncio.TimeoutError:
+        return False, elapsed_ms(started), "连接超时 (1.5秒)"
+    except Exception as e:
+        return False, elapsed_ms(started), str(e)
+
+
+_probe_cache = {}
+PROBE_CACHE_TTL = 30.0
+
+
+async def _get_probe_result(key, host, port, use_proxy=False):
+    """带 30s 内存缓存的网络链路测速包装器，降低高频探测开销"""
+    now = time.time()
+    cached = _probe_cache.get(key)
+    if cached and (now - cached["ts"]) < PROBE_CACHE_TTL:
+        return cached["ok"], cached["ms"], cached["err"], True
+        
+    ok, ms, err = await _probe_link_async(host, port, use_proxy=use_proxy)
+    _probe_cache[key] = {
+        "ok": ok,
+        "ms": ms,
+        "err": err,
+        "ts": now
+    }
+    return ok, ms, err, False
+
+
 def _check_socket(host, port, timeout=0.35):
     started = time.monotonic()
     try:
@@ -97,11 +209,13 @@ def _check_socket(host, port, timeout=0.35):
         return False, elapsed_ms(started), str(exc)
 
 
-def _doctor_item(key, label, ok, detail, fix=""):
+def _doctor_item(key, label, ok, detail, fix="", status=None):
+    if status is None:
+        status = "ok" if ok else "warning"
     return {
         "key": key,
         "label": label,
-        "status": "ok" if ok else "warning",
+        "status": status,
         "detail": detail,
         "fix": fix,
     }
@@ -156,7 +270,7 @@ def build_provider_health_report(path=PROVIDER_HEALTH_PATH):
     }
 
 
-def build_doctor_report():
+async def build_doctor_report():
     upstream = proxy_cache.get()
     whitelist.refresh_if_needed()
     reader = ClaudeUsageReader()
@@ -165,6 +279,7 @@ def build_doctor_report():
     if projects_dir.exists():
         transcript_files = list(projects_dir.rglob("*.jsonl"))[:200]
 
+    # 1. 基础端口诊断
     proxy_ok, proxy_ms, proxy_error = _check_socket(LISTEN_HOST, LISTEN_PORT)
     dashboard_ok, dashboard_ms, dashboard_error = _check_socket(
         DASHBOARD_HOST,
@@ -182,6 +297,171 @@ def build_doctor_report():
             if upstream_ok
             else f"{upstream[0]}:{upstream[1]} 不可连接：{upstream_error}"
         )
+
+    # 2. 屏蔽名单诊断
+    blocklist_ok = True
+    blocklist_msg = ""
+    blocklist_advice = "如果文件不存在，可在 Blocklist 页保存一次自动创建。"
+    try:
+        blocklist.refresh_if_needed()
+        if not os.path.exists(blocklist.path):
+            blocklist_ok = False
+            blocklist_msg = "屏蔽名单配置文件 blocklist.txt 不存在"
+            blocklist_advice = "请在 Dashboard 的 Whitelist/Blocklist 页面中保存一次以自动创建 blocklist.txt。"
+        else:
+            with open(blocklist.path, "r", encoding="utf-8") as f:
+                content = f.read()
+            if not content.strip():
+                blocklist_msg = f"{blocklist.path} 存在但内容为空 (已解析加载 0 条规则)"
+            else:
+                blocklist_msg = f"{blocklist.path}，当前已解析加载 {blocklist.pattern_count} 条屏蔽规则"
+    except Exception as e:
+        blocklist_ok = False
+        blocklist_msg = f"屏蔽名单读取失败: {str(e)}"
+        blocklist_advice = "请检查 blocklist.txt 的读取权限或编码格式。"
+
+    # 3. 异步网络探测 (带 30s 内存缓存的异步探针)
+    baidu_task = _get_probe_result("baidu", "baidu.com", 80, use_proxy=False)
+    anthropic_task = _get_probe_result("anthropic", "api.anthropic.com", 443, use_proxy=True)
+    openai_task = _get_probe_result("openai", "api.openai.com", 443, use_proxy=True)
+    
+    baidu_res, anthropic_res, openai_res = await asyncio.gather(
+        baidu_task, anthropic_task, openai_task
+    )
+    
+    baidu_ok, baidu_ms, baidu_err, baidu_cached = baidu_res
+    anthropic_ok, anthropic_ms, anthropic_err, anthropic_cached = anthropic_res
+    openai_ok, openai_ms, openai_err, openai_cached = openai_res
+
+    # 4. SQLite 遥测数据库物理健康度与 I/O 压测
+    db_ok = True
+    db_status = "ok"
+    db_msg = ""
+    db_advice = "如果读写缓慢，建议清理历史统计或优化磁盘剩余空间。"
+    try:
+        import sqlite3
+        db_path = Path(STATS_DB_FILE)
+        if not db_path.exists():
+            db_ok = False
+            db_status = "error"
+            db_msg = "数据库文件 smart-proxy-stats.db 不存在"
+            db_advice = "请重新启动代理服务，它会自动在初始化时创建该数据库。"
+        else:
+            db_size_mb = db_path.stat().st_size / (1024 * 1024)
+            
+            io_start = time.time()
+            conn = sqlite3.connect(db_path, timeout=2.0)
+            cursor = conn.cursor()
+            
+            # SQLite PRAGMA 完整性校验
+            cursor.execute("PRAGMA integrity_check;")
+            integrity = cursor.fetchone()[0]
+            if integrity != "ok":
+                raise ValueError(f"SQLite 完整性校验失败: {integrity}")
+                
+            # 统计累计请求记录数
+            cursor.execute("SELECT COUNT(*) FROM proxy_requests;")
+            total_requests = cursor.fetchone()[0]
+            
+            # I/O 读写性能实测压测
+            cursor.execute("CREATE TABLE IF NOT EXISTS __doctor_io_test (id INTEGER PRIMARY KEY, val TEXT);")
+            cursor.execute("INSERT INTO __doctor_io_test (val) VALUES ('diagnose');")
+            cursor.execute("SELECT val FROM __doctor_io_test WHERE val = 'diagnose';")
+            cursor.execute("DROP TABLE __doctor_io_test;")
+            conn.commit()
+            conn.close()
+            
+            io_ms = int((time.time() - io_start) * 1000)
+            db_msg = f"连接正常 · 完整性 {integrity} · 累计请求 {total_requests} 条 · 大小 {db_size_mb:.2f} MB · I/O 延迟 {io_ms}ms"
+            
+            if io_ms > 100:
+                db_status = "warning"
+                db_msg += " (I/O 延迟较高，可能存在磁盘写入瓶颈)"
+    except Exception as e:
+        db_ok = False
+        db_status = "error"
+        db_msg = f"数据库异常: {str(e)}"
+
+    # 5. 注册表与环境变量冲突检测
+    sys_ok = True
+    sys_msg = ""
+    sys_advice = "若无需系统全局代理，建议在系统设置中关闭代理或清理相关环境变量。"
+    sys_status = "ok"
+    
+    reg_enabled, reg_server, reg_override = False, "", ""
+    is_win = sys.platform == "win32"
+    if is_win:
+        try:
+            import winreg
+            reg_key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
+            )
+            proxy_enable, _ = winreg.QueryValueEx(reg_key, "ProxyEnable")
+            proxy_server, _ = winreg.QueryValueEx(reg_key, "ProxyServer")
+            proxy_override, _ = winreg.QueryValueEx(reg_key, "ProxyOverride")
+            winreg.CloseKey(reg_key)
+            reg_enabled = bool(proxy_enable)
+            reg_server = str(proxy_server or "")
+            reg_override = str(proxy_override or "")
+        except Exception as e:
+            reg_override = f"读取失败: {str(e)}"
+            
+    http_proxy = os.environ.get("HTTP_PROXY", "")
+    https_proxy = os.environ.get("HTTPS_PROXY", "")
+    
+    details = []
+    issues = []
+    
+    if reg_enabled:
+        details.append(f"注册表全局代理: 已启用 (地址: {reg_server})")
+        if f":{LISTEN_PORT}" in reg_server:
+            issues.append(f"检测到环路风险：系统全局代理指向了 Smart Proxy 本身端口 {LISTEN_PORT}，这可能会导致请求死循环。")
+            sys_advice = "建议将系统代理服务器地址修改为上游内核端口 (如 10090)，或在 Smart Proxy 运行时不要将自身设为系统全局代理。"
+            sys_status = "warning"
+    else:
+        details.append("注册表全局代理: 已关闭")
+        
+    if http_proxy:
+        details.append(f"HTTP_PROXY: {http_proxy}")
+        if not http_proxy.startswith("http://") and not http_proxy.startswith("https://"):
+            issues.append("环境变量 HTTP_PROXY 格式不规范 (缺失 http:// 协议头)")
+            sys_status = "warning"
+    if https_proxy:
+        details.append(f"HTTPS_PROXY: {https_proxy}")
+        if not https_proxy.startswith("http://") and not https_proxy.startswith("https://"):
+            issues.append("环境变量 HTTPS_PROXY 格式不规范 (缺失 https:// 协议头)")
+            sys_status = "warning"
+            
+    if issues:
+        sys_msg = " | ".join(details) + " ⚠️ 潜在冲突: " + " & ".join(issues)
+    else:
+        sys_msg = " | ".join(details) + " (无环境变量及注册表冲突)"
+
+    # 6. 守护资源监控 (Uptime, Memory RSS, asyncio tasks)
+    uptime_sec = time.time() - START_TIME
+    days = int(uptime_sec // 86400)
+    hours = int((uptime_sec % 86400) // 3600)
+    minutes = int((uptime_sec % 3600) // 60)
+    
+    if days > 0:
+        uptime_str = f"{days}天 {hours}小时 {minutes}分钟"
+    elif hours > 0:
+        uptime_str = f"{hours}小时 {minutes}分钟"
+    else:
+        uptime_str = f"{int(uptime_sec)}秒"
+        
+    tasks_count = len(asyncio.all_tasks())
+    mem_bytes = _get_self_memory_win()
+    mem_mb = mem_bytes / (1024 * 1024)
+    
+    resource_status = "ok"
+    resource_msg = f"在线时长 {uptime_str} · 内存占用 {mem_mb:.1f} MB · 活跃协程 {tasks_count} 个"
+    resource_advice = "正常运行中。若协程数或内存超标，建议择机重启代理服务。"
+    
+    if mem_mb > 200.0 or tasks_count > 500:
+        resource_status = "warning"
+        resource_msg += " (资源占用过高，建议择机重启代理以释放资源)"
 
     checks = [
         _doctor_item(
@@ -228,11 +508,79 @@ def build_doctor_report():
             "如果文件不存在，可在 Whitelist 页保存一次自动创建。",
         ),
         _doctor_item(
+            "blocklist",
+            "屏蔽名单",
+            blocklist_ok,
+            blocklist_msg,
+            blocklist_advice,
+            status="ok" if blocklist_ok else "error",
+        ),
+        _doctor_item(
             "upstream",
             "系统代理 / 上游代理",
             upstream_ok,
             upstream_detail,
             "检查 Windows 系统代理设置或上游代理进程。",
+        ),
+        _doctor_item(
+            "net_baidu",
+            "公网连通性 (国内直连)",
+            baidu_ok,
+            (
+                f"Baidu 可达，耗时 {baidu_ms}ms" + (" (已缓存)" if baidu_cached else "")
+                if baidu_ok
+                else f"Baidu 连接失败: {baidu_err}"
+            ),
+            "请检查本地物理宽带或网线连接是否正常。",
+            status="ok" if baidu_ok else "error",
+        ),
+        _doctor_item(
+            "net_anthropic",
+            "Anthropic 可达性 (Claude 链路)",
+            anthropic_ok,
+            (
+                f"Claude 链路畅通，已通过代理握手连通，耗时 {anthropic_ms}ms" + (" (已缓存)" if anthropic_cached else "")
+                if anthropic_ok
+                else f"连接超时: {anthropic_err}"
+            ),
+            "确认本地代理软件(mihomo)是否正常工作、机场节点是否可用。",
+            status="ok" if anthropic_ok else "error",
+        ),
+        _doctor_item(
+            "net_openai",
+            "OpenAI 可达性 (ChatGPT 链路)",
+            openai_ok,
+            (
+                f"ChatGPT 链路畅通，已通过代理握手连通，耗时 {openai_ms}ms" + (" (已缓存)" if openai_cached else "")
+                if openai_ok
+                else f"连接超时: {openai_err}"
+            ),
+            "确认机场节点是否处于高可用状态或全局代理设置。",
+            status="ok" if openai_ok else "error",
+        ),
+        _doctor_item(
+            "database",
+            "遥测数据库健康度",
+            db_ok,
+            db_msg,
+            db_advice,
+            status=db_status,
+        ),
+        _doctor_item(
+            "env_proxy",
+            "系统代理与冲突检测",
+            sys_ok,
+            sys_msg,
+            sys_advice,
+            status=sys_status,
+        ),
+        _doctor_item(
+            "resources",
+            "守护进程资源诊断",
+            True,
+            resource_msg,
+            resource_advice,
+            status=resource_status,
         ),
     ]
     return {

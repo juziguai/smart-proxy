@@ -237,17 +237,27 @@ async def _handle_client(
         if content_length > 0:
             request_body = await reader.readexactly(content_length)
 
-        status, headers, body = handle_stats_request(
-            method,
-            urlparse(target),
-            stats_store,
-            status_provider=status_provider,
-            whitelist_provider=whitelist_provider,
-            blocklist_provider=blocklist_provider,
-            doctor_provider=doctor_provider,
-            provider_health_provider=provider_health_provider,
-            request_body=request_body,
-        )
+        parsed_url = urlparse(target)
+        if method == "GET" and parsed_url.path == "/api/doctor":
+            if doctor_provider is None:
+                res = {"checks": []}
+            else:
+                res = doctor_provider()
+                if asyncio.iscoroutine(res):
+                    res = await res
+            status, headers, body = build_stats_response(200, res)
+        else:
+            status, headers, body = handle_stats_request(
+                method,
+                parsed_url,
+                stats_store,
+                status_provider=status_provider,
+                whitelist_provider=whitelist_provider,
+                blocklist_provider=blocklist_provider,
+                doctor_provider=doctor_provider,
+                provider_health_provider=provider_health_provider,
+                request_body=request_body,
+            )
         reason = {
             200: "OK",
             201: "Created",

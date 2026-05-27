@@ -4,7 +4,9 @@
     let draggedWidget = null;
     let refreshTimer = null;
     let whitelistEntriesState = [];
+    let whitelistEntriesBackupState = [];
     let blocklistEntriesState = [];
+    let blocklistEntriesBackupState = [];
     let doctorLoaded = false;
     let doctorLoading = false;
     let providerHealthLoaded = false;
@@ -752,6 +754,7 @@
       const response = await fetch('/api/whitelist', { cache: 'no-store' });
       const data = await response.json();
       whitelistEntriesState = data.entries || [];
+      whitelistEntriesBackupState = [...whitelistEntriesState];
       const loadedAt = data.loaded_at ? new Date(data.loaded_at).toLocaleString() : '尚未加载';
       text('whitelistMeta', `${data.path || 'whitelist.txt'} · ${fmt.format(data.count || 0)} 条 · ${loadedAt}`);
       renderWhitelistEntries(document.getElementById('whitelistInput').value);
@@ -759,12 +762,38 @@
     };
     const addWhitelistEntry = entry => {
       const value = String(entry || '').trim();
-      if (!value || whitelistEntriesState.includes(value)) return;
+      if (!value) {
+        return { ok: false, reason: 'empty' };
+      }
+      if (whitelistEntriesState.includes(value)) {
+        return { ok: false, reason: 'exists' };
+      }
       whitelistEntriesState = [...whitelistEntriesState, value].sort();
       document.getElementById('whitelistInput').value = '';
       renderWhitelistEntries();
+      return { ok: true };
     };
     const saveWhitelistEntries = async (successMessage = '白名单保存成功') => {
+      // 1. 自动帮用户添加输入框中的有效未添加规则
+      const inputEl = document.getElementById('whitelistInput');
+      const inputValue = String(inputEl.value || '').trim();
+      let hasAutoAdded = false;
+      if (inputValue) {
+        if (!whitelistEntriesState.includes(inputValue)) {
+          const addRes = addWhitelistEntry(inputValue);
+          if (addRes && addRes.ok) {
+            hasAutoAdded = true;
+          }
+        }
+      }
+
+      // 2. 脏数据/无变更检查
+      const isDirty = JSON.stringify(whitelistEntriesState) !== JSON.stringify(whitelistEntriesBackupState);
+      if (!isDirty && !hasAutoAdded) {
+        showWhitelistFeedback('配置未发生变更，无需保存', 'info');
+        return;
+      }
+
       const response = await fetch('/api/whitelist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -776,6 +805,7 @@
         throw new Error(data.error || `HTTP ${response.status}`);
       }
       whitelistEntriesState = data.entries || [];
+      whitelistEntriesBackupState = [...whitelistEntriesState];
       const loadedAt = data.loaded_at ? new Date(data.loaded_at).toLocaleString() : '刚刚';
       text('whitelistMeta', `${data.path || 'whitelist.txt'} · ${fmt.format(data.count || 0)} 条 · ${loadedAt}`);
       showWhitelistFeedback(successMessage, 'ok');
@@ -846,6 +876,7 @@
       const response = await fetch('/api/blocklist', { cache: 'no-store' });
       const data = await response.json();
       blocklistEntriesState = data.entries || [];
+      blocklistEntriesBackupState = [...blocklistEntriesState];
       const loadedAt = data.loaded_at ? new Date(data.loaded_at).toLocaleString() : '尚未加载';
       text('blocklistMeta', `${data.path || 'blocklist.txt'} · ${fmt.format(data.count || 0)} 条 · ${loadedAt}`);
       renderBlocklistEntries(document.getElementById('blocklistInput').value);
@@ -885,12 +916,38 @@
     };
     const addBlocklistEntry = entry => {
       const value = String(entry || '').trim();
-      if (!value || blocklistEntriesState.includes(value)) return;
+      if (!value) {
+        return { ok: false, reason: 'empty' };
+      }
+      if (blocklistEntriesState.includes(value)) {
+        return { ok: false, reason: 'exists' };
+      }
       blocklistEntriesState = [...blocklistEntriesState, value].sort();
       document.getElementById('blocklistInput').value = '';
       renderBlocklistEntries();
+      return { ok: true };
     };
     const saveBlocklistEntries = async (successMessage = '屏蔽名单保存成功') => {
+      // 1. 自动帮用户添加输入框中的有效未添加规则
+      const inputEl = document.getElementById('blocklistInput');
+      const inputValue = String(inputEl.value || '').trim();
+      let hasAutoAdded = false;
+      if (inputValue) {
+        if (!blocklistEntriesState.includes(inputValue)) {
+          const addRes = addBlocklistEntry(inputValue);
+          if (addRes && addRes.ok) {
+            hasAutoAdded = true;
+          }
+        }
+      }
+
+      // 2. 脏数据/无变更检查
+      const isDirty = JSON.stringify(blocklistEntriesState) !== JSON.stringify(blocklistEntriesBackupState);
+      if (!isDirty && !hasAutoAdded) {
+        showBlocklistFeedback('配置未发生变更，无需保存', 'info');
+        return;
+      }
+
       const response = await fetch('/api/blocklist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -902,6 +959,7 @@
         throw new Error(data.error || `HTTP ${response.status}`);
       }
       blocklistEntriesState = data.entries || [];
+      blocklistEntriesBackupState = [...blocklistEntriesState];
       const loadedAt = data.loaded_at ? new Date(data.loaded_at).toLocaleString() : '刚刚';
       text('blocklistMeta', `${data.path || 'blocklist.txt'} · ${fmt.format(data.count || 0)} 条 · ${loadedAt}`);
       showBlocklistFeedback(successMessage, 'ok');
@@ -926,7 +984,9 @@
             <span>${escapeHtml(check.detail || '-')}</span>
             ${check.status === 'ok' ? '' : `<span>${escapeHtml(check.fix || '请检查本地配置')}</span>`}
           </div>
-          <span class="status-badge doctor-status ${escapeHtml(check.status || 'warning')}">${check.status === 'ok' ? '正常' : '关注'}</span>
+          <span class="status-badge doctor-status ${escapeHtml(check.status || 'warning')}">
+            ${check.status === 'ok' ? '正常' : (check.status === 'warning' ? '关注' : '异常')}
+          </span>
         </div>
       `).join('');
     };
@@ -1268,28 +1328,60 @@
     document.getElementById('themeToggle').addEventListener('click', () => {
       document.body.classList.toggle('dark-mode');
     });
-    document.getElementById('addWhitelistEntry').addEventListener('click', () => {
-      addWhitelistEntry(document.getElementById('whitelistInput').value);
-      showWhitelistFeedback('已加入本地列表，点击保存后写入 whitelist.txt', 'info');
-    });
-    document.getElementById('whitelistInput').addEventListener('keydown', event => {
-      if (event.key === 'Enter') {
-        addWhitelistEntry(event.target.value);
+    const handleAddWhitelist = () => {
+      const inputEl = document.getElementById('whitelistInput');
+      const result = addWhitelistEntry(inputEl.value);
+      if (!result.ok) {
+        inputEl.classList.remove('shake-anim');
+        void inputEl.offsetWidth; // 触发 reflow
+        inputEl.classList.add('shake-anim');
+        setTimeout(() => inputEl.classList.remove('shake-anim'), 300);
+
+        if (result.reason === 'empty') {
+          showWhitelistFeedback('请输入有效的白名单规则 (例如 *.github.com)', 'error');
+        } else if (result.reason === 'exists') {
+          showWhitelistFeedback('该规则已存在于白名单中', 'warning');
+        }
+      } else {
         showWhitelistFeedback('已加入本地列表，点击保存后写入 whitelist.txt', 'info');
       }
+    };
+
+    const handleAddBlocklist = () => {
+      const inputEl = document.getElementById('blocklistInput');
+      const result = addBlocklistEntry(inputEl.value);
+      if (!result.ok) {
+        inputEl.classList.remove('shake-anim');
+        void inputEl.offsetWidth; // 触发 reflow
+        inputEl.classList.add('shake-anim');
+        setTimeout(() => inputEl.classList.remove('shake-anim'), 300);
+
+        if (result.reason === 'empty') {
+          showBlocklistFeedback('请输入有效的屏蔽规则 (例如 *.gvt2.com)', 'error');
+        } else if (result.reason === 'exists') {
+          showBlocklistFeedback('该规则已存在于屏蔽名单中', 'warning');
+        }
+      } else {
+        showBlocklistFeedback('已加入本地列表，点击保存后写入 blocklist.txt', 'info');
+      }
+    };
+
+    document.getElementById('addWhitelistEntry').addEventListener('click', handleAddWhitelist);
+    document.getElementById('whitelistInput').addEventListener('keydown', event => {
+      if (event.key === 'Enter') {
+        handleAddWhitelist();
+      }
     });
-    document.getElementById('saveWhitelist').addEventListener('click', saveWhitelistEntries);
+    document.getElementById('saveWhitelist').addEventListener('click', () => {
+      saveWhitelistEntries();
+    });
     document.getElementById('whitelistInput').addEventListener('input', event => {
       renderWhitelistEntries(event.target.value);
     });
-    document.getElementById('addBlocklistEntry').addEventListener('click', () => {
-      addBlocklistEntry(document.getElementById('blocklistInput').value);
-      showBlocklistFeedback('已加入本地列表，点击保存后写入 blocklist.txt', 'info');
-    });
+    document.getElementById('addBlocklistEntry').addEventListener('click', handleAddBlocklist);
     document.getElementById('blocklistInput').addEventListener('keydown', event => {
       if (event.key === 'Enter') {
-        addBlocklistEntry(event.target.value);
-        showBlocklistFeedback('已加入本地列表，点击保存后写入 blocklist.txt', 'info');
+        handleAddBlocklist();
       }
     });
     document.getElementById('blocklistInput').addEventListener('input', event => {
