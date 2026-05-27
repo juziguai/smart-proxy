@@ -4,6 +4,7 @@
     let draggedWidget = null;
     let refreshTimer = null;
     let whitelistEntriesState = [];
+    let blocklistEntriesState = [];
     let doctorLoaded = false;
     let doctorLoading = false;
     let providerHealthLoaded = false;
@@ -770,6 +771,66 @@
         }
       }
     };
+    const showBlocklistFeedback = (message, type = 'info') => {
+      const feedback = document.getElementById('blocklistFeedback');
+      feedback.textContent = message;
+      feedback.className = `feedback show ${type}`;
+    };
+    const renderBlocklistEntries = () => {
+      const container = document.getElementById('blocklistEntries');
+      if (!blocklistEntriesState.length) {
+        container.innerHTML = '<div class="table-empty">屏蔽名单为空，保存后会自动创建 blocklist.txt</div>';
+        return;
+      }
+      container.innerHTML = blocklistEntriesState.map(entry => `
+        <div class="entry-item">
+          <div>
+            <strong>${escapeHtml(entry)}</strong>
+            <span>${entry.includes('*') ? '通配规则' : '精确 Host'}</span>
+          </div>
+          <button class="mini-danger" data-remove-blocklist="${escapeHtml(entry)}">删除</button>
+        </div>
+      `).join('');
+      container.querySelectorAll('[data-remove-blocklist]').forEach(button => {
+        button.addEventListener('click', () => {
+          blocklistEntriesState = blocklistEntriesState.filter(entry => entry !== button.dataset.removeBlocklist);
+          renderBlocklistEntries();
+        });
+      });
+    };
+    const refreshBlocklist = async () => {
+      const response = await fetch('/api/blocklist', { cache: 'no-store' });
+      const data = await response.json();
+      blocklistEntriesState = data.entries || [];
+      const loadedAt = data.loaded_at ? new Date(data.loaded_at).toLocaleString() : '尚未加载';
+      text('blocklistMeta', `${data.path || 'blocklist.txt'} · ${fmt.format(data.count || 0)} 条 · ${loadedAt}`);
+      renderBlocklistEntries();
+    };
+    const addBlocklistEntry = entry => {
+      const value = String(entry || '').trim();
+      if (!value || blocklistEntriesState.includes(value)) return;
+      blocklistEntriesState = [...blocklistEntriesState, value].sort();
+      document.getElementById('blocklistInput').value = '';
+      renderBlocklistEntries();
+    };
+    const saveBlocklistEntries = async (successMessage = '屏蔽名单保存成功') => {
+      const response = await fetch('/api/blocklist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entries: blocklistEntriesState }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        showBlocklistFeedback(`保存失败：${data.error || response.status}`, 'error');
+        throw new Error(data.error || `HTTP ${response.status}`);
+      }
+      blocklistEntriesState = data.entries || [];
+      const loadedAt = data.loaded_at ? new Date(data.loaded_at).toLocaleString() : '刚刚';
+      text('blocklistMeta', `${data.path || 'blocklist.txt'} · ${fmt.format(data.count || 0)} 条 · ${loadedAt}`);
+      showBlocklistFeedback(successMessage, 'ok');
+      renderBlocklistEntries();
+      await refreshBlocklist();
+    };
     const renderDoctor = doctor => {
       const checks = (doctor.checks || [])
         .filter(check => check.key !== 'provider_health');
@@ -1025,6 +1086,7 @@
         fmt.format(u.cache_read_input_tokens + u.cache_creation_input_tokens)
       );
       text('cacheSub', `读 ${compactNumber(u.cache_read_input_tokens)} / 写 ${compactNumber(u.cache_creation_input_tokens)}`);
+      setMetric('blockedRequests', fmt.format(p.blocked_requests || 0));
       setMetric('avgLatency', `${fmt.format(p.average_connect_latency_ms || p.average_latency_ms || 0)}ms`);
       setMetric('successRateKpi', percent(p.success_rate));
       text('successRate', `${pointComparisonText(comparison, p.success_rate, previousProxy.success_rate)} · 持续 ${fmt.format(p.average_duration_ms || 0)}ms`);
@@ -1047,7 +1109,7 @@
       renderModelFilter(u.models);
       renderTrendChart(trendData.points);
       renderLatencyChart(trendData.points);
-      await Promise.allSettled([refreshWhitelist()]);
+      await Promise.allSettled([refreshWhitelist(), refreshBlocklist()]);
       const refreshedAt = new Date().toLocaleTimeString();
       text('status', `最后刷新 ${refreshedAt}`);
       text('lastRefreshAt', `最后刷新 ${refreshedAt}`);
@@ -1140,6 +1202,19 @@
       }
     });
     document.getElementById('saveWhitelist').addEventListener('click', saveWhitelistEntries);
+    document.getElementById('addBlocklistEntry').addEventListener('click', () => {
+      addBlocklistEntry(document.getElementById('blocklistInput').value);
+      showBlocklistFeedback('已加入本地列表，点击保存后写入 blocklist.txt', 'info');
+    });
+    document.getElementById('blocklistInput').addEventListener('keydown', event => {
+      if (event.key === 'Enter') {
+        addBlocklistEntry(event.target.value);
+        showBlocklistFeedback('已加入本地列表，点击保存后写入 blocklist.txt', 'info');
+      }
+    });
+    document.getElementById('saveBlocklist').addEventListener('click', () => {
+      saveBlocklistEntries();
+    });
     document.getElementById('runDoctor').addEventListener(
       'click',
       () => refreshDoctor({ force: true }),

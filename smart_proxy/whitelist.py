@@ -107,3 +107,43 @@ class WhitelistProvider:
             "path": self._whitelist.path,
             "loaded_at": self._whitelist.loaded_at,
         }
+
+
+class Blocklist(Whitelist):
+    """屏蔽名单：glob 匹配即快速拒绝，不转发到上游。
+
+    与 Whitelist 完全相同的文件格式和匹配逻辑，
+    语义上独立命名，使路由决策代码意图更清晰。
+    """
+    pass
+
+
+class BlocklistProvider:
+    """为 Dashboard API 提供 blocklist 读取与写入能力。"""
+
+    def __init__(self, blocklist_obj):
+        self._blocklist = blocklist_obj
+
+    def get(self):
+        self._blocklist.refresh_if_needed()
+        entries = self._blocklist.entries()
+        return {
+            "entries": entries,
+            "path": self._blocklist.path,
+            "count": len(entries),
+            "loaded_at": self._blocklist.loaded_at,
+        }
+
+    def save(self, payload):
+        entries = payload.get("entries")
+        if not isinstance(entries, list):
+            raise ValueError("entries must be a list")
+        saved = self._blocklist.save_entries(entries)
+        return {
+            "ok": True,
+            "entries": saved,
+            "count": len(saved),
+            "path": self._blocklist.path,
+            "loaded_at": self._blocklist.loaded_at,
+        }
+

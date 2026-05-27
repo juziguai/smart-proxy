@@ -46,7 +46,7 @@ class LatencyTracker:
 
 from smart_proxy.claude_usage_reader import ClaudeUsageReader
 from smart_proxy.config import DEFAULT_CONFIG
-from smart_proxy.whitelist import Whitelist, WhitelistProvider
+from smart_proxy.whitelist import Whitelist, WhitelistProvider, Blocklist, BlocklistProvider
 from smart_proxy.stats_store import ProxyRequestEvent, StatsStore
 from smart_proxy.stats_server import (
     DASHBOARD_HOST,
@@ -78,11 +78,14 @@ proxy_cache = Cache(CACHE_SEC)
 
 WHITELIST_FILE = DEFAULT_CONFIG.whitelist_file
 WHITELIST_RELOAD_SEC = DEFAULT_CONFIG.whitelist_reload_sec
+BLOCKLIST_FILE = DEFAULT_CONFIG.blocklist_file
+BLOCKLIST_RELOAD_SEC = DEFAULT_CONFIG.blocklist_reload_sec
 STATS_DB_FILE = DEFAULT_CONFIG.stats_db_file
 stats_store = None
 
 
 whitelist = Whitelist(WHITELIST_FILE, WHITELIST_RELOAD_SEC)
+blocklist = Blocklist(BLOCKLIST_FILE, BLOCKLIST_RELOAD_SEC)
 
 
 def _check_socket(host, port, timeout=0.35):
@@ -969,7 +972,35 @@ async def handle(client_r, client_w):
     # extract host and check whitelist
     host = extract_host(target, first_line)
     tracker.host = host or target
-    
+
+    # ── 最优先：屏蔽名单检查（快速拒绝，不转发）────────────────────
+    if host and blocklist.match(host):
+        duration_ms = elapsed_ms(start_monotonic)
+        log(f"{method} {host} -> BLOCKED")
+        safe_write(client_w, b"HTTP/1.1 502 Blocked\r\nContent-Length: 0\r\n\r\n")
+        client_w.close()
+        record_proxy_stats(
+            started_at,
+            method,
+            host,
+            "blocked",
+            False,
+            duration_ms,
+            "blocked by blocklist",
+            duration_ms=duration_ms,
+            stage="blocked",
+            client_addr=client_addr,
+            client_port=client_port,
+            target_port=target_port,
+            upstream_host=upstream_host,
+            upstream_port=upstream_port,
+            client_pid=client_info["pid"],
+            client_process=client_info["process"],
+            client_exe=client_info["exe"],
+            client_label=client_info["label"],
+        )
+        return
+
     # 结合静态白名单进行自适应动态决策
     in_whitelist = whitelist.match(host) if host else False
     adaptive_route = decide_adaptive_route(host, in_whitelist) if host else "proxy"
@@ -1140,6 +1171,7 @@ async def main():
                 DASHBOARD_PORT,
                 status_provider=build_runtime_status,
                 whitelist_provider=WhitelistProvider(whitelist, lambda: stats_store),
+                blocklist_provider=BlocklistProvider(blocklist),
                 doctor_provider=build_doctor_report,
                 provider_health_provider=build_provider_health_report,
             )
@@ -1157,6 +1189,7 @@ async def main():
                     DASHBOARD_PORT,
                     status_provider=build_runtime_status,
                     whitelist_provider=WhitelistProvider(whitelist, lambda: stats_store),
+                    blocklist_provider=BlocklistProvider(blocklist),
                     doctor_provider=build_doctor_report,
                     provider_health_provider=build_provider_health_report,
                 )

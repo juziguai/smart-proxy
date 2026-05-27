@@ -44,6 +44,7 @@ def handle_stats_request(
     stats_store,
     status_provider=None,
     whitelist_provider=None,
+    blocklist_provider=None,
     doctor_provider=None,
     provider_health_provider=None,
     request_body=b"",
@@ -120,6 +121,26 @@ def handle_stats_request(
         except ValueError as exc:
             return build_stats_response(400, {"error": str(exc)})
 
+    if method == "GET" and parsed_url.path == "/api/blocklist":
+        if blocklist_provider is None:
+            return build_stats_response(
+                200,
+                {"entries": [], "path": "", "count": 0, "loaded_at": ""},
+            )
+        return build_stats_response(200, blocklist_provider.get())
+
+    if method == "POST" and parsed_url.path == "/api/blocklist":
+        if blocklist_provider is None:
+            return build_stats_response(503, {"error": "blocklist unavailable"})
+        try:
+            payload = json.loads(request_body.decode("utf-8") or "{}")
+        except json.JSONDecodeError:
+            return build_stats_response(400, {"error": "invalid json"})
+        try:
+            return build_stats_response(200, blocklist_provider.save(payload))
+        except ValueError as exc:
+            return build_stats_response(400, {"error": str(exc)})
+
     if method == "GET" and parsed_url.path == "/api/doctor":
         if doctor_provider is None:
             return build_stats_response(200, {"checks": []})
@@ -158,6 +179,7 @@ async def start_stats_server_with_status(
     port=DASHBOARD_PORT,
     status_provider=None,
     whitelist_provider=None,
+    blocklist_provider=None,
     doctor_provider=None,
     provider_health_provider=None,
 ):
@@ -168,6 +190,7 @@ async def start_stats_server_with_status(
             stats_store,
             status_provider,
             whitelist_provider,
+            blocklist_provider,
             doctor_provider,
             provider_health_provider,
         ),
@@ -183,6 +206,7 @@ async def _handle_client(
     stats_store,
     status_provider=None,
     whitelist_provider=None,
+    blocklist_provider=None,
     doctor_provider=None,
     provider_health_provider=None,
 ):
@@ -219,6 +243,7 @@ async def _handle_client(
             stats_store,
             status_provider=status_provider,
             whitelist_provider=whitelist_provider,
+            blocklist_provider=blocklist_provider,
             doctor_provider=doctor_provider,
             provider_health_provider=provider_health_provider,
             request_body=request_body,

@@ -17,6 +17,8 @@ class SmartProxyConfig:
     read_size: int
     whitelist_file: Path
     whitelist_reload_sec: int
+    blocklist_file: Path
+    blocklist_reload_sec: int
     stats_db_file: Path
     provider_health_path: Path
 
@@ -30,6 +32,8 @@ DEFAULTS = {
     "read_size": 65536,
     "whitelist_file": "whitelist.txt",
     "whitelist_reload_sec": 60,
+    "blocklist_file": "blocklist.txt",
+    "blocklist_reload_sec": 60,
     "stats_db_file": "smart-proxy-stats.db",
     "provider_health_path": "logs/provider-health.json",
 }
@@ -43,6 +47,8 @@ ENV_KEYS = {
     "SMART_PROXY_READ_SIZE": "read_size",
     "SMART_PROXY_WHITELIST_FILE": "whitelist_file",
     "SMART_PROXY_WHITELIST_RELOAD_SEC": "whitelist_reload_sec",
+    "SMART_PROXY_BLOCKLIST_FILE": "blocklist_file",
+    "SMART_PROXY_BLOCKLIST_RELOAD_SEC": "blocklist_reload_sec",
     "SMART_PROXY_STATS_DB_FILE": "stats_db_file",
     "SMART_PROXY_PROVIDER_HEALTH_PATH": "provider_health_path",
 }
@@ -53,10 +59,12 @@ INT_FIELDS = {
     "cache_sec",
     "read_size",
     "whitelist_reload_sec",
+    "blocklist_reload_sec",
 }
 
 PATH_FIELDS = {
     "whitelist_file",
+    "blocklist_file",
     "stats_db_file",
     "provider_health_path",
 }

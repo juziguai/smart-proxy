@@ -27,4 +27,6 @@ tests/
 *.local
 *.local.*
 whitelist.txt
+blocklist.txt
 antigravity-tls-relay.py
+

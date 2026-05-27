@@ -436,7 +436,15 @@ class StatsStore:
                         AS average_connect_latency_ms,
                     COALESCE(AVG({duration_expr}), 0) AS average_duration_ms
                 FROM proxy_requests
-                {where}
+                {where} {'AND' if where else 'WHERE'} route != 'blocked'
+                """,
+                params,
+            ).fetchone()
+            blocked_row = conn.execute(
+                f"""
+                SELECT COUNT(*) AS blocked_requests
+                FROM proxy_requests
+                {where} {'AND' if where else 'WHERE'} route = 'blocked'
                 """,
                 params,
             ).fetchone()
@@ -501,6 +509,7 @@ class StatsStore:
         total_requests = int(row["total_requests"])
         successful_requests = int(row["successful_requests"])
         failed_requests = int(row["failed_requests"])
+        blocked_requests = int(blocked_row["blocked_requests"])
         average_connect_latency_ms = int(row["average_connect_latency_ms"])
         average_duration_ms = int(row["average_duration_ms"])
         average_latency_ms = average_connect_latency_ms
@@ -609,6 +618,7 @@ class StatsStore:
             "total_requests": total_requests,
             "successful_requests": successful_requests,
             "failed_requests": failed_requests,
+            "blocked_requests": blocked_requests,
             "slow_requests": slow_requests,
             "success_rate": success_rate,
             "average_latency_ms": average_latency_ms,
