@@ -1194,13 +1194,14 @@
       }
       // 3. SQLite 数据库物理健康度拆分
       else if (check.key === 'database') {
-        const sizeMatched = check.detail.match(/大小\s*([\d\.]+)\s*(MB|KB|B)/i);
-        const ioMatched = check.detail.match(/I\/O\s*延迟\s*(\d+ms)/i);
-        const countMatched = check.detail.match(/累计请求\s*(\d+)\s*条/i);
-
-        const sizeStr = sizeMatched ? sizeMatched[0] : '未知';
-        const ioStr = ioMatched ? ioMatched[1] : '正常';
-        const countStr = countMatched ? countMatched[1] : '0';
+        const data = check.data || {};
+        const action = (check.actions || []).find(item => item.id === 'prune_proxy_stats');
+        const sizeStr = Number.isFinite(data.size_mb) ? `${data.size_mb} MB` : '未知';
+        const ioStr = Number.isFinite(data.io_ms) ? `${data.io_ms}ms` : '正常';
+        const countStr = Number.isFinite(data.total_requests) ? String(data.total_requests) : '0';
+        const retainedStr = Number.isFinite(data.retained_requests_7d) ? String(data.retained_requests_7d) : '0';
+        const prunableStr = Number.isFinite(data.prunable_requests_7d) ? String(data.prunable_requests_7d) : '0';
+        const integrityStr = data.integrity || 'unknown';
 
         customSpecsHtml = `
           <div class="modal-specs-block">
@@ -1220,9 +1221,26 @@
               </div>
               <div class="telemetry-row">
                 <span class="tel-label">逻辑结构健康度 (PRAGMA)</span>
-                <span class="tel-value select-text text-green" style="color:#10b981;font-weight:900;">🟢 INTEGRITY_OK</span>
+                <span class="tel-value select-text text-green" style="color:#10b981;font-weight:900;">${escapeHtml(integrityStr)}</span>
+              </div>
+              <div class="telemetry-row">
+                <span class="tel-label">最近 7 天保留量</span>
+                <span class="tel-value select-text">${escapeHtml(retainedStr)} 条</span>
+              </div>
+              <div class="telemetry-row">
+                <span class="tel-label">可治理历史量</span>
+                <span class="tel-value select-text">${escapeHtml(prunableStr)} 条</span>
               </div>
             </div>
+            ${action ? `
+              <div class="specs-action-row">
+                <span class="specs-path-text select-text">保留最近 7 天并执行 VACUUM 压缩</span>
+                <button class="mini-primary doctor-prune-db-btn" id="modalPruneProxyStatsBtn" data-url="${escapeHtml(action.url || '/api/prune-proxy-stats')}">
+                  ${escapeHtml(action.label || '保留最近7天并压缩')}
+                </button>
+              </div>
+              <div class="modal-empty-tip" id="modalPruneProxyStatsResult" hidden></div>
+            ` : ''}
           </div>
         `;
       }
@@ -1509,6 +1527,45 @@
           } finally {
             testBtn.disabled = false;
             testBtn.innerHTML = originalText;
+          }
+        });
+      }
+
+      const pruneBtn = overlay.querySelector('#modalPruneProxyStatsBtn');
+      if (pruneBtn) {
+        pruneBtn.addEventListener('click', async () => {
+          pruneBtn.disabled = true;
+          const originalText = pruneBtn.innerHTML;
+          const resultEl = overlay.querySelector('#modalPruneProxyStatsResult');
+          pruneBtn.innerHTML = '治理中...';
+          if (resultEl) {
+            resultEl.hidden = false;
+            resultEl.textContent = '正在删除 7 天前统计并压缩数据库...';
+          }
+
+          try {
+            const url = pruneBtn.getAttribute('data-url') || '/api/prune-proxy-stats';
+            const res = await fetch(url, { method: 'POST', cache: 'no-store' });
+            const data = await res.json();
+            if (!res.ok || data.error) {
+              throw new Error(data.error || `HTTP ${res.status}`);
+            }
+            const beforeMb = (data.size_before_bytes / 1024 / 1024).toFixed(2);
+            const afterMb = (data.size_after_bytes / 1024 / 1024).toFixed(2);
+            if (resultEl) {
+              resultEl.textContent = `已删除 ${data.deleted_count} 条，剩余 ${data.remaining_count} 条，体积 ${beforeMb} MB -> ${afterMb} MB`;
+            }
+            await Promise.allSettled([
+              refresh(),
+              refreshDoctor({ force: true }),
+            ]);
+          } catch (error) {
+            if (resultEl) {
+              resultEl.textContent = `治理失败：${error.message || error}`;
+            }
+          } finally {
+            pruneBtn.disabled = false;
+            pruneBtn.innerHTML = originalText;
           }
         });
       }

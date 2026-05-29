@@ -72,6 +72,7 @@ class ForwardResult:
     success: bool
     connect_latency_ms: int | None = None
     error: str | None = None
+    stage: str | None = None
 
 
 proxy_cache = Cache(CACHE_SEC)
@@ -92,7 +93,7 @@ blocklist = Blocklist(BLOCKLIST_FILE, BLOCKLIST_RELOAD_SEC)
 
 def _get_self_memory_win():
     if sys.platform != "win32":
-        return 0
+        return None
     try:
         import ctypes
         from ctypes import wintypes
@@ -112,7 +113,14 @@ def _get_self_memory_win():
             ]
             
         GetProcessMemoryInfo = ctypes.windll.psapi.GetProcessMemoryInfo
+        GetProcessMemoryInfo.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(PROCESS_MEMORY_COUNTERS),
+            wintypes.DWORD,
+        ]
+        GetProcessMemoryInfo.restype = wintypes.BOOL
         GetCurrentProcess = ctypes.windll.kernel32.GetCurrentProcess
+        GetCurrentProcess.restype = wintypes.HANDLE
         
         process_handle = GetCurrentProcess()
         counters = PROCESS_MEMORY_COUNTERS()
@@ -122,7 +130,7 @@ def _get_self_memory_win():
             return counters.WorkingSetSize
     except Exception:
         pass
-    return 0
+    return None
 
 
 async def _probe_link_async(host, port, use_proxy=False):
@@ -209,16 +217,21 @@ def _check_socket(host, port, timeout=0.35):
         return False, elapsed_ms(started), str(exc)
 
 
-def _doctor_item(key, label, ok, detail, fix="", status=None):
+def _doctor_item(key, label, ok, detail, fix="", status=None, data=None, actions=None):
     if status is None:
         status = "ok" if ok else "warning"
-    return {
+    item = {
         "key": key,
         "label": label,
         "status": status,
         "detail": detail,
         "fix": fix,
     }
+    if data is not None:
+        item["data"] = data
+    if actions is not None:
+        item["actions"] = actions
+    return item
 
 
 def build_provider_health_doctor_item(path=PROVIDER_HEALTH_PATH):
@@ -338,6 +351,8 @@ async def build_doctor_report():
     db_status = "ok"
     db_msg = ""
     db_advice = "如果读写缓慢，建议清理历史统计或优化磁盘剩余空间。"
+    db_data = None
+    db_actions = None
     try:
         import sqlite3
         db_path = Path(STATS_DB_FILE)
@@ -362,6 +377,14 @@ async def build_doctor_report():
             # 统计累计请求记录数
             cursor.execute("SELECT COUNT(*) FROM proxy_requests;")
             total_requests = cursor.fetchone()[0]
+            cursor.execute(
+                """
+                SELECT COUNT(*)
+                FROM proxy_requests
+                WHERE datetime(started_at) >= datetime('now', '-7 days')
+                """
+            )
+            retained_requests = cursor.fetchone()[0]
             
             # I/O 读写性能实测压测
             cursor.execute("CREATE TABLE IF NOT EXISTS __doctor_io_test (id INTEGER PRIMARY KEY, val TEXT);")
@@ -372,7 +395,25 @@ async def build_doctor_report():
             conn.close()
             
             io_ms = int((time.time() - io_start) * 1000)
+            old_requests = max(0, total_requests - retained_requests)
             db_msg = f"连接正常 · 完整性 {integrity} · 累计请求 {total_requests} 条 · 大小 {db_size_mb:.2f} MB · I/O 延迟 {io_ms}ms"
+            db_data = {
+                "integrity": integrity,
+                "total_requests": total_requests,
+                "retained_requests_7d": retained_requests,
+                "prunable_requests_7d": old_requests,
+                "size_mb": round(db_size_mb, 2),
+                "io_ms": io_ms,
+                "retention_days": 7,
+            }
+            db_actions = [
+                {
+                    "id": "prune_proxy_stats",
+                    "label": "保留最近7天并压缩",
+                    "method": "POST",
+                    "url": "/api/prune-proxy-stats",
+                }
+            ]
             
             if io_ms > 100:
                 db_status = "warning"
@@ -453,13 +494,14 @@ async def build_doctor_report():
         
     tasks_count = len(asyncio.all_tasks())
     mem_bytes = _get_self_memory_win()
-    mem_mb = mem_bytes / (1024 * 1024)
+    mem_mb = (mem_bytes / (1024 * 1024)) if mem_bytes else None
+    mem_text = f"{mem_mb:.1f} MB" if mem_mb is not None else "未知"
     
     resource_status = "ok"
-    resource_msg = f"在线时长 {uptime_str} · 内存占用 {mem_mb:.1f} MB · 活跃协程 {tasks_count} 个"
+    resource_msg = f"在线时长 {uptime_str} · 内存占用 {mem_text} · 活跃协程 {tasks_count} 个"
     resource_advice = "正常运行中。若协程数或内存超标，建议择机重启代理服务。"
     
-    if mem_mb > 200.0 or tasks_count > 500:
+    if (mem_mb is not None and mem_mb > 200.0) or tasks_count > 500:
         resource_status = "warning"
         resource_msg += " (资源占用过高，建议择机重启代理以释放资源)"
 
@@ -565,6 +607,8 @@ async def build_doctor_report():
             db_msg,
             db_advice,
             status=db_status,
+            data=db_data,
+            actions=db_actions,
         ),
         _doctor_item(
             "env_proxy",
@@ -774,6 +818,16 @@ def elapsed_ms(start_monotonic):
     return int((time.monotonic() - start_monotonic) * 1000)
 
 
+def classify_tunnel_close(tracker, task_c2r=None, task_r2c=None):
+    if tracker.total_remote_bytes > 0:
+        return "tunnel_closed", None
+    if task_r2c is not None and task_r2c.done():
+        return "remote_closed_empty", "remote closed without response bytes"
+    if task_c2r is not None and task_c2r.done():
+        return "client_closed_after_request", "client closed before remote response bytes"
+    return "remote_closed_empty", "tunnel closed without response bytes"
+
+
 # ── CONNECT (TLS tunnel) ──────────────────────────────────────────────
 
 async def connect_direct_tunnel(client_r, client_w, target, tracker=None):
@@ -808,14 +862,23 @@ async def connect_direct_tunnel(client_r, client_w, target, tracker=None):
     
     task_c2r = asyncio.create_task(relay_client_to_remote(client_r, rmt_w, tracker))
     task_r2c = asyncio.create_task(relay_remote_to_client(rmt_r, client_w, tracker))
+    close_stage = "tunnel_closed"
+    close_error = None
     
     try:
         done, pending = await asyncio.wait(
             [task_c2r, task_r2c],
             return_when=asyncio.FIRST_COMPLETED
         )
+        close_stage, close_error = classify_tunnel_close(
+            tracker,
+            task_c2r=task_c2r,
+            task_r2c=task_r2c,
+        )
     except Exception as exc:
         profiler_logger.error(f"[{tracker.request_id}] Direct tunnel wait error: {exc}")
+        close_stage = "forward_failed"
+        close_error = str(exc)
     finally:
         # 强切 Pending 任务
         for t in [task_c2r, task_r2c]:
@@ -835,7 +898,12 @@ async def connect_direct_tunnel(client_r, client_w, target, tracker=None):
             pass
             
     print_profiler_report(tracker)
-    return ForwardResult(success=True, connect_latency_ms=connect_latency_ms)
+    return ForwardResult(
+        success=True,
+        connect_latency_ms=connect_latency_ms,
+        error=close_error,
+        stage=close_stage,
+    )
 
 
 async def connect_via_proxy(client_r, client_w, target, upstream, tracker=None):
@@ -941,14 +1009,23 @@ async def connect_via_proxy(client_r, client_w, target, upstream, tracker=None):
     # ── 双向协程启动与强切逻辑 ──
     task_c2r = asyncio.create_task(relay_client_to_remote(client_r, pw, tracker))
     task_r2c = asyncio.create_task(relay_remote_to_client(pr, client_w, tracker))
+    close_stage = "tunnel_closed"
+    close_error = None
     
     try:
         done, pending = await asyncio.wait(
             [task_c2r, task_r2c],
             return_when=asyncio.FIRST_COMPLETED
         )
+        close_stage, close_error = classify_tunnel_close(
+            tracker,
+            task_c2r=task_c2r,
+            task_r2c=task_r2c,
+        )
     except Exception as exc:
         profiler_logger.error(f"[{tracker.request_id}] CONNECT wait error: {exc}")
+        close_stage = "forward_failed"
+        close_error = str(exc)
     finally:
         for t in [task_c2r, task_r2c]:
             if not t.done():
@@ -966,7 +1043,12 @@ async def connect_via_proxy(client_r, client_w, target, upstream, tracker=None):
             pass
             
     print_profiler_report(tracker)
-    return ForwardResult(success=True, connect_latency_ms=connect_latency_ms)
+    return ForwardResult(
+        success=True,
+        connect_latency_ms=connect_latency_ms,
+        error=close_error,
+        stage=close_stage,
+    )
 
 
 # ── plain HTTP (non-CONNECT) ──────────────────────────────────────────
@@ -1213,11 +1295,12 @@ def record_route_metrics(host: str, route: str, latency_ms: float, success: bool
 
         # 判定 A: 直连发生极其严重的超时 (时延 >= 3000ms)，或者连续 2 次直连失败
         if (last_latencies and last_latencies[-1] >= 3000) or consecutive_failures >= 2:
-            score.status = "DEMOTED"
-            score.status_expire_at = now + 300.0  # 惩罚 5 分钟
-            msg = f"[Adaptive-Route] 检测到 Host {host} 直连质量崩溃 (时延: {latency_ms:.1f}ms, 成功: {success})。智能降级走代理 5 分钟！"
-            log(msg)
-            profiler_logger.info(msg)
+            if score.status != "DEMOTED":
+                score.status = "DEMOTED"
+                score.status_expire_at = now + 300.0  # 惩罚 5 分钟
+                msg = f"[Adaptive-Route] 检测到 Host {host} 直连质量崩溃 (时延: {latency_ms:.1f}ms, 成功: {success})。智能降级走代理 5 分钟！"
+                log(msg)
+                profiler_logger.info(msg)
             
     elif route == "proxy":
         # 代理状态监控
@@ -1228,11 +1311,12 @@ def record_route_metrics(host: str, route: str, latency_ms: float, success: bool
             # 查一下最近直连历史，如果没有严重报错，可以尝试升级
             has_good_direct = len(score.direct_history) > 0 and all(lat < 2000 and succ for lat, succ in score.direct_history)
             if has_good_direct or len(score.direct_history) == 0:
-                score.status = "PROMOTED"
-                score.status_expire_at = now + 300.0  # 升级享受 5 分钟
-                msg = f"[Adaptive-Route] 检测到 Host {host} 代理耗时严重拥堵 (T3: {latency_ms:.1f}ms)。智能升格直连 5 分钟！"
-                log(msg)
-                profiler_logger.info(msg)
+                if score.status != "PROMOTED":
+                    score.status = "PROMOTED"
+                    score.status_expire_at = now + 300.0  # 升级享受 5 分钟
+                    msg = f"[Adaptive-Route] 检测到 Host {host} 代理耗时严重拥堵 (T3: {latency_ms:.1f}ms)。智能升格直连 5 分钟！"
+                    log(msg)
+                    profiler_logger.info(msg)
 
 
 # ── main handler ──────────────────────────────────────────────────────
@@ -1257,6 +1341,7 @@ async def handle(client_r, client_w):
     error = None
     connect_latency_ms = None
     target_port = None
+    stage = "completed"
     try:
         first_line = await asyncio.wait_for(client_r.readline(), timeout=10)
     except asyncio.TimeoutError:
@@ -1408,6 +1493,8 @@ async def handle(client_r, client_w):
         if isinstance(result, ForwardResult):
             success = result.success
             connect_latency_ms = result.connect_latency_ms
+            if result.stage:
+                stage = result.stage
             if result.error:
                 error = result.error
         else:
@@ -1427,7 +1514,7 @@ async def handle(client_r, client_w):
             error,
             connect_latency_ms=connect_latency_ms,
             duration_ms=duration_ms,
-            stage="tunnel_closed" if success else "forward_failed",
+            stage=stage if success else "forward_failed",
             client_addr=client_addr,
             client_port=client_port,
             target_port=target_port,

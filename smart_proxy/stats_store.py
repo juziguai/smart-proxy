@@ -885,6 +885,54 @@ class StatsStore:
             with conn:
                 conn.execute("DELETE FROM proxy_requests")
 
+    def prune_proxy_stats(self, keep_days=7, now=None):
+        keep_days = max(1, int(keep_days))
+        current = parse_datetime(now) if now else datetime.now().astimezone()
+        cutoff = current - timedelta(days=keep_days)
+        cutoff_iso = cutoff.isoformat()
+        size_before = self._db_path.stat().st_size if self._db_path.exists() else 0
+
+        with self._connection() as conn:
+            before_count = self._count_proxy_requests(conn)
+            with conn:
+                cursor = conn.execute(
+                    """
+                    DELETE FROM proxy_requests
+                    WHERE datetime(started_at) < datetime(?)
+                    """,
+                    (cutoff_iso,),
+                )
+                deleted_count = cursor.rowcount if cursor.rowcount >= 0 else 0
+            remaining_count = self._count_proxy_requests(conn)
+
+        vacuum_ok = True
+        vacuum_error = ""
+        try:
+            with self._connection() as conn:
+                conn.isolation_level = None
+                conn.execute("VACUUM")
+        except sqlite3.Error as exc:
+            vacuum_ok = False
+            vacuum_error = str(exc)
+
+        size_after = self._db_path.stat().st_size if self._db_path.exists() else 0
+        return {
+            "ok": vacuum_ok,
+            "keep_days": keep_days,
+            "cutoff": cutoff_iso,
+            "before_count": before_count,
+            "deleted_count": deleted_count,
+            "remaining_count": remaining_count,
+            "size_before_bytes": size_before,
+            "size_after_bytes": size_after,
+            "vacuum_ok": vacuum_ok,
+            "vacuum_error": vacuum_error,
+        }
+
+    def _count_proxy_requests(self, conn):
+        row = conn.execute("SELECT COUNT(*) AS count FROM proxy_requests").fetchone()
+        return int(row["count"] if isinstance(row, sqlite3.Row) else row[0])
+
     def _connect(self):
         conn = sqlite3.connect(self._db_path)
         conn.row_factory = sqlite3.Row

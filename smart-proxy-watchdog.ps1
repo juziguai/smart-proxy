@@ -201,14 +201,14 @@ while ($true) {
                 Restart-SmartProxy
                 $lastRestartAt = Get-Date
                 $after = Wait-SmartProxyHealthy -TimeoutSeconds 15
-                Write-WatchdogLog "post-restart ok=$($after.ok) upstream=$($after.upstream_proxy) upstream_ok=$($after.upstream_ok)"
+                Write-WatchdogLog "post-restart ok=$($after.ok) runtime_upstream=$($after.upstream_proxy) upstream_ok=$($after.upstream_ok)"
             }
             else {
                 Write-WatchdogLog "unhealthy but restart cooldown active"
             }
         }
         elseif (-not $health.upstream_ok) {
-            Write-WatchdogLog "smart-proxy healthy but upstream warning: $($health.upstream_proxy) $($health.upstream_note)"
+            Write-WatchdogLog "smart-proxy healthy but runtime upstream warning: $($health.upstream_proxy) $($health.upstream_note)"
         }
     }
     catch {

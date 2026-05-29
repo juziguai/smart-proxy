@@ -155,6 +155,15 @@ def handle_stats_request(
         stats_store.clear_proxy_stats()
         return build_stats_response(200, {"ok": True})
 
+    if method == "POST" and parsed_url.path == "/api/prune-proxy-stats":
+        params = parse_qs(parsed_url.query)
+        keep_days = params.get("keep_days", ["7"])[0]
+        try:
+            result = stats_store.prune_proxy_stats(keep_days=keep_days)
+        except (TypeError, ValueError) as exc:
+            return build_stats_response(400, {"error": str(exc)})
+        return build_stats_response(200, result)
+
     return build_stats_response(404, {"error": "not found"})
 
 
