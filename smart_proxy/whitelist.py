@@ -82,17 +82,78 @@ class WhitelistProvider:
         self._whitelist = whitelist_obj
         self._store_getter = store_getter
 
+    def _generalize_candidates(self, candidates, entries):
+        """
+        智能化白名单通配符预测与去重推荐算法：
+        1. 当发现候选人中有同父域的其他子域名(如 token-plan-cn.xiaomimimo.com)，
+           而白名单中已存在该父域下的精确规则(如 platform.xiaomimimo.com)时，
+           自动聚合成 `*.xiaomimimo.com` 升级推荐，高亮排在候选人最顶端；
+        2. 若候选人已被现有的通配符规则覆盖，直接标记为 is_covered = True 以过滤干扰。
+        """
+        wildcards = [e for e in entries if "*" in e]
+        exacts = [e for e in entries if "*" not in e]
+
+        processed = []
+        parent_exacts = {}
+        for e in exacts:
+            parts = e.split(".")
+            if len(parts) >= 2:
+                parent = ".".join(parts[-2:])
+                parent_exacts[parent] = e
+
+        for c in candidates:
+            host = c["host"]
+
+            # 1. 检查是否已被现有通配符覆盖
+            import fnmatch
+            is_covered = any(fnmatch.fnmatch(host, w) for w in wildcards)
+            c["is_covered"] = is_covered
+            c["suggestion_type"] = "normal"
+            c["reason"] = ""
+
+            # 2. 检查是否有同父域升级机会
+            parts = host.split(".")
+            if len(parts) >= 3:
+                parent = ".".join(parts[-2:])
+                if parts[-2] in ("com", "org", "net", "gov", "edu") and len(parts) >= 4:
+                    parent = ".".join(parts[-3:])
+
+                if parent in parent_exacts and not is_covered:
+                    wildcard_pattern = f"*.{parent}"
+                    if not any(p["host"] == wildcard_pattern for p in processed):
+                        processed.append({
+                            "host": wildcard_pattern,
+                            "total_requests": c["total_requests"],
+                            "proxy_requests": c["proxy_requests"],
+                            "whitelist_requests": c["whitelist_requests"],
+                            "failed_requests": c["failed_requests"],
+                            "slow_requests": c["slow_requests"],
+                            "average_connect_latency_ms": c["average_connect_latency_ms"],
+                            "is_covered": False,
+                            "suggestion_type": "wildcard_upgrade",
+                            "reason": parent_exacts[parent]
+                        })
+
+            processed.append(c)
+
+        processed.sort(key=lambda x: (x.get("suggestion_type") == "wildcard_upgrade", x["proxy_requests"]), reverse=True)
+        return processed
+
     def get(self):
         self._whitelist.refresh_if_needed()
         store = self._store_getter()
         candidates = store.get_whitelist_candidates(limit=12) if store else []
         entries = self._whitelist.entries()
+
+        # 智能白名单通配符预测升级
+        generalized = self._generalize_candidates(candidates, entries)
+
         return {
             "entries": entries,
             "path": self._whitelist.path,
             "count": len(entries),
             "loaded_at": self._whitelist.loaded_at,
-            "candidates": candidates,
+            "candidates": generalized,
         }
 
     def save(self, payload):

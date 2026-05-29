@@ -232,6 +232,37 @@ def classify_client_process(process_name, exe_path, command_line):
     return "Unknown"
 
 
+
+# 全局异步线程池与待查询 PID 缓存防抖，用于后台静默加载慢速 CommandLine
+from concurrent.futures import ThreadPoolExecutor
+_BG_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="bg_proc_cmd")
+_PENDING_PIDS = set()
+
+
+def _bg_query_command_line(pid, exe_path, process_name):
+    """后台执行慢速命令行 powershell 查询，并热更新缓存"""
+    try:
+        cmd_line = query_process_command_line(pid)
+    except Exception:
+        cmd_line = ""
+
+    # 解析出高精度分类结果
+    lbl = classify_client_process(process_name, exe_path, cmd_line)
+
+    info = {
+        "pid": pid,
+        "process": process_name,
+        "exe": exe_path,
+        "label": lbl,
+    }
+    # 热更新全局进程信息缓存
+    PROCESS_INFO_CACHE[pid] = {
+        "cached_at": time.monotonic(),
+        "info": info
+    }
+    _PENDING_PIDS.discard(pid)
+
+
 def unknown_client_process():
     return {
         "pid": None,
@@ -251,20 +282,46 @@ def resolve_client_process(client_addr, client_port):
 
     now = time.monotonic()
     cached = PROCESS_INFO_CACHE.get(pid)
+
+    # 1. 命中完整的未过期缓存，秒回
     if cached and now - cached["cached_at"] < PROCESS_INFO_CACHE_SEC:
         return cached["info"]
 
+    # 2. 未命中或缓存过期：原生 ctypes 映像路径极速提取（内存直读，< 1ms）
     exe_path = query_process_image_path(pid)
-    command_line = query_process_command_line(pid)
     process_name = Path(exe_path).name if exe_path else ""
-    if not process_name and command_line:
-        process_name = Path(command_line.split(" ", 1)[0].strip('"')).name
+
+    # 基于 EXE 映像路径做快速粗归类
+    lbl = classify_client_process(process_name, exe_path, "")
 
     info = {
         "pid": pid,
         "process": process_name,
         "exe": exe_path,
-        "label": classify_client_process(process_name, exe_path, command_line),
+        "label": lbl,
     }
-    PROCESS_INFO_CACHE[pid] = {"cached_at": now, "info": info}
+
+    # 3. 智能双轨分流：判定是否需要高精度的 CommandLine（如 node, bun, python 或者是 Unknown）
+    needs_precise = (
+        process_name.lower() in ("node.exe", "bun.exe", "python.exe", "pythonw.exe", "cmd.exe", "")
+        or lbl == "Unknown"
+    )
+
+    if needs_precise and pid not in _PENDING_PIDS:
+        _PENDING_PIDS.add(pid)
+        # 核心优化：将耗时 400ms 的 PowerShell 子进程创建完全剥离到后台线程池，主线程 0 秒等待！
+        try:
+            _BG_EXECUTOR.submit(_bg_query_command_line, pid, exe_path, process_name)
+        except Exception:
+            _PENDING_PIDS.discard(pid)
+
+    # 如果不需要精准匹配或者第一次刚建立，先更新一下当前粗粒度的缓存
+    if not cached:
+        PROCESS_INFO_CACHE[pid] = {"cached_at": now, "info": info}
+
+    # 4. 如果是缓存稍稍过期，但存在旧缓存，先继续使用旧缓存以保证绝对的零卡顿，后台线程会自动完成热更新
+    if cached:
+        return cached["info"]
+
+    # 5. 瞬间返回粗分类进程信息，全程 < 1ms，彻底干掉本地中继的 T1 拥堵！
     return info

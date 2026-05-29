@@ -773,6 +773,873 @@
       background: #881337;
       color: #ffe4e6;
     }
+
+    /* ==========================================================================
+       极客自检诊断仪表盘 - 单个自检项独立卡片 (Modern Premium Doctor Single Cards)
+       ========================================================================== */
+    @keyframes pulseGlow {
+      0%, 100% { transform: scale(1); opacity: 0.4; }
+      50% { transform: scale(2.2); opacity: 0; }
+    }
+    @keyframes pulseGlowFast {
+      0%, 100% { transform: scale(1); opacity: 0.6; }
+      50% { transform: scale(2.5); opacity: 0; }
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .loading-spin {
+      animation: spin 0.8s linear infinite;
+    }
+
+    .doctor-dashboard-container {
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+      margin-top: 15px;
+      animation: fadeIn 0.4s ease-out;
+    }
+
+    /* 顶部健康看板 Banner */
+    .doctor-health-banner {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: linear-gradient(135deg, rgba(255,255,255,0.7) 0%, rgba(240,246,252,0.5) 100%);
+      border: 1px solid rgba(255, 255, 255, 0.4);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border-radius: 16px;
+      padding: 24px 32px;
+      box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.04);
+      transition: all 0.3s ease;
+      gap: 24px;
+    }
+    body.dark-mode .doctor-health-banner {
+      background: linear-gradient(135deg, rgba(17,24,39,0.7) 0%, rgba(13,18,30,0.5) 100%);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.2);
+    }
+    .health-gauge {
+      display: flex;
+      align-items: center;
+      gap: 24px;
+    }
+    .health-score-ring {
+      position: relative;
+      width: 80px;
+      height: 80px;
+      flex-shrink: 0;
+    }
+    .health-score-ring svg {
+      width: 100%;
+      height: 100%;
+      transform: rotate(-90deg);
+    }
+    .health-score-ring circle {
+      fill: none;
+      stroke-width: 8px;
+    }
+    .health-score-ring circle.ring-bg {
+      stroke: rgba(0, 0, 0, 0.04);
+    }
+    body.dark-mode .health-score-ring circle.ring-bg {
+      stroke: rgba(255, 255, 255, 0.04);
+    }
+    .health-score-ring circle.ring-fill {
+      stroke: #10b981;
+      stroke-linecap: round;
+      stroke-dasharray: 251.2;
+      stroke-dashoffset: 251.2;
+      transition: stroke-dashoffset 0.8s cubic-bezier(0.4, 0, 0.2, 1), stroke 0.8s ease;
+    }
+    .health-score-val {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 26px;
+      font-weight: 900;
+      color: #0f172a;
+      font-family: 'Outfit', 'Inter', system-ui, sans-serif;
+    }
+    body.dark-mode .health-score-val {
+      color: #f1f5f9;
+    }
+    .health-info h3 {
+      margin: 0 0 6px 0;
+      font-size: 18px;
+      font-weight: 900;
+      color: #0f172a;
+      letter-spacing: -0.02em;
+    }
+    body.dark-mode .health-info h3 {
+      color: #f8fafc;
+    }
+    .health-info p.panel-intro {
+      margin: 0 0 8px 0;
+      font-size: 12px;
+      font-weight: 700;
+      color: #64748b;
+    }
+    body.dark-mode .health-info p.panel-intro {
+      color: #94a3b8;
+    }
+    .health-desc {
+      font-size: 13px;
+      color: #475569;
+      font-weight: 600;
+    }
+    body.dark-mode .health-desc {
+      color: #cbd5e1;
+    }
+
+    .doctor-actions .refresh-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+      border: none;
+      color: white;
+      padding: 10px 18px;
+      border-radius: 10px;
+      font-weight: 800;
+      font-size: 13.5px;
+      cursor: pointer;
+      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+      box-shadow: 0 4px 14px rgba(37, 99, 235, 0.2);
+    }
+    .doctor-actions .refresh-btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(37, 99, 235, 0.35);
+      background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+    }
+    .doctor-actions .refresh-btn:active {
+      transform: translateY(0);
+    }
+
+    /* 自适应单卡片流式网格 */
+    .doctor-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      grid-auto-rows: 1fr;
+      gap: 16px;
+    }
+    @media (max-width: 768px) {
+      .doctor-health-banner {
+        flex-direction: column;
+        align-items: flex-start;
+        padding: 20px;
+      }
+      .doctor-actions {
+        width: 100%;
+      }
+      .doctor-actions .refresh-btn {
+        width: 100%;
+        justify-content: center;
+      }
+    }
+
+    /* 独立检查项毛玻璃卡片 */
+    .doctor-single-card {
+      background: rgba(255, 255, 255, 0.45);
+      border: 1px solid rgba(255, 255, 255, 0.5);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 4px 16px rgba(31, 38, 135, 0.02);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+      position: relative;
+      overflow: hidden;
+    }
+    body.dark-mode .doctor-single-card {
+      background: rgba(17, 24, 39, 0.4);
+      border: 1px solid rgba(255, 255, 255, 0.04);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+    }
+    .doctor-single-card:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 8px 24px rgba(31, 38, 135, 0.06);
+      border-color: rgba(37, 99, 235, 0.15);
+      background: rgba(255, 255, 255, 0.65);
+    }
+    body.dark-mode .doctor-single-card:hover {
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+      border-color: rgba(59, 130, 246, 0.15);
+      background: rgba(17, 24, 39, 0.55);
+    }
+
+    /* 卡片头部行 */
+    .card-top-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .status-indicator-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .card-icon-mini {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #64748b;
+      opacity: 0.8;
+      transition: color 0.25s ease;
+    }
+    body.dark-mode .card-icon-mini {
+      color: #94a3b8;
+    }
+
+    /* 图标颜色跟状态产生呼应 */
+    .doctor-single-card.status-ok .card-icon-mini {
+      color: #10b981;
+    }
+    .doctor-single-card.status-warning .card-icon-mini {
+      color: #f59e0b;
+    }
+    .doctor-single-card.status-error .card-icon-mini {
+      color: #ef4444;
+    }
+
+    /* 卡片指标标题与描述 */
+    .card-item-title {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 850;
+      color: #0f172a;
+      letter-spacing: -0.01em;
+    }
+    body.dark-mode .card-item-title {
+      color: #f1f5f9;
+    }
+    .card-item-detail {
+      margin: 0;
+      font-size: 11.5px;
+      color: #64748b;
+      line-height: 1.5;
+      word-break: break-all;
+      flex: 1; /* 撑满卡片，让修复建议框始终底部对齐 */
+      font-weight: 600;
+    }
+    body.dark-mode .card-item-detail {
+      color: #94a3b8;
+    }
+
+    /* 建议修复内嵌盒 */
+    .card-item-fix-box {
+      font-size: 10.5px;
+      font-weight: 800;
+      color: #d97706;
+      background: #fffbeb;
+      padding: 6px 10px;
+      border-radius: 6px;
+      border-left: 2px solid #f59e0b;
+      display: flex;
+      align-items: flex-start;
+      gap: 6px;
+      line-height: 1.4;
+      margin-top: 4px;
+    }
+    body.dark-mode .card-item-fix-box {
+      background: rgba(245, 158, 11, 0.08);
+      color: #fef3c7;
+      border-left: 2px solid #fbbf24;
+    }
+    .doctor-single-card.status-error .card-item-fix-box {
+      color: #dc2626;
+      background: #fef2f2;
+      border-left-color: #ef4444;
+    }
+    body.dark-mode .doctor-single-card.status-error .card-item-fix-box {
+      background: rgba(239, 68, 68, 0.08);
+      color: #fee2e2;
+      border-left-color: #f87171;
+    }
+    .fix-pin {
+      flex-shrink: 0;
+    }
+    .fix-text {
+      flex: 1;
+    }
+
+    /* 精美状态小胶囊 */
+    .single-card-badge {
+      font-size: 10px;
+      font-weight: 800;
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+    .single-card-badge.badge-ok {
+      background: #d1fae5;
+      color: #065f46;
+    }
+    body.dark-mode .single-card-badge.badge-ok {
+      background: rgba(16, 185, 129, 0.15);
+      color: #34d399;
+    }
+    .single-card-badge.badge-warn {
+      background: #fef3c7;
+      color: #92400e;
+    }
+    body.dark-mode .single-card-badge.badge-warn {
+      background: rgba(245, 158, 11, 0.15);
+      color: #fbbf24;
+    }
+    .single-card-badge.badge-error {
+      background: #fee2e2;
+      color: #991b1b;
+    }
+    body.dark-mode .single-card-badge.badge-error {
+      background: rgba(239, 68, 68, 0.15);
+      color: #f87171;
+    }
+
+    /* 指示灯呼吸发光 */
+    .modern-status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin-top: 5px;
+      flex-shrink: 0;
+      position: relative;
+    }
+    .modern-status-dot.dot-ok {
+      background: #10b981;
+      box-shadow: 0 0 8px rgba(16, 185, 129, 0.6);
+    }
+    .modern-status-dot.dot-warn {
+      background: #f59e0b;
+      box-shadow: 0 0 8px rgba(245, 158, 11, 0.6);
+    }
+    .modern-status-dot.dot-error {
+      background: #ef4444;
+      box-shadow: 0 0 8px rgba(239, 68, 68, 0.6);
+    }
+    .pulse-ring {
+      position: absolute;
+      top: -4px;
+      left: -4px;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      border: 2px solid #f59e0b;
+      opacity: 0;
+      animation: pulseGlow 2s infinite ease-out;
+    }
+    .pulse-ring-fast {
+      position: absolute;
+      top: -4px;
+      left: -4px;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      border: 2px solid #ef4444;
+      opacity: 0;
+      animation: pulseGlowFast 1.2s infinite ease-out;
+    }
+
+    /* ==========================================================================
+       自检卡片及Banner防误触文字选中与二级弹窗样式
+       ========================================================================== */
+    .doctor-single-card,
+    .doctor-health-banner {
+      user-select: none;
+      -webkit-user-select: none;
+      -moz-user-select: none;
+      -ms-user-select: none;
+    }
+
+    /* 允许二级模态框里的文本可以自由选择与复制 */
+    .select-text {
+      user-select: text !important;
+      -webkit-user-select: text !important;
+      -moz-user-select: text !important;
+      -ms-user-select: text !important;
+    }
+
+    /* 遮罩层动画 */
+    @keyframes fadeInOverlay {
+      from { opacity: 0; background: rgba(15, 23, 42, 0); }
+      to { opacity: 1; background: rgba(15, 23, 42, 0.4); }
+    }
+    @keyframes fadeOutOverlay {
+      from { opacity: 1; background: rgba(15, 23, 42, 0.4); }
+      to { opacity: 0; background: rgba(15, 23, 42, 0); }
+    }
+    /* 卡片弹出动画 (带点Q弹回弹) */
+    @keyframes zoomInCard {
+      from { transform: scale(0.92); opacity: 0; }
+      to { transform: scale(1); opacity: 1; }
+    }
+    @keyframes zoomOutCard {
+      from { transform: scale(1); opacity: 1; }
+      to { transform: scale(0.94); opacity: 0; }
+    }
+
+    .doctor-modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: rgba(15, 23, 42, 0.4);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      z-index: 2000;
+      animation: fadeInOverlay 0.22s ease-out forwards;
+    }
+    .doctor-modal-overlay.modal-fade-out {
+      animation: fadeOutOverlay 0.2s ease-in forwards;
+    }
+
+    .doctor-modal-card {
+      width: 500px;
+      max-width: 90%;
+      background: rgba(255, 255, 255, 0.95);
+      border: 1px solid rgba(255, 255, 255, 0.8);
+      border-radius: 16px;
+      box-shadow: 0 20px 50px rgba(15, 23, 42, 0.15);
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      animation: zoomInCard 0.28s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+      transition: all 0.2s ease;
+    }
+    body.dark-mode .doctor-modal-card {
+      background: rgba(15, 23, 42, 0.95);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
+    }
+    .doctor-modal-card.modal-zoom-out {
+      animation: zoomOutCard 0.2s ease-in forwards;
+    }
+
+    /* 弹出卡片头部 */
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+      padding-bottom: 14px;
+    }
+    body.dark-mode .modal-header {
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    .modal-title-group {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .modal-title-group h3 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 900;
+      color: #0f172a;
+      letter-spacing: -0.02em;
+    }
+    body.dark-mode .modal-title-group h3 {
+      color: #f8fafc;
+    }
+    .modal-close-btn {
+      background: transparent;
+      border: none;
+      color: #94a3b8;
+      cursor: pointer;
+      padding: 6px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s ease;
+    }
+    .modal-close-btn:hover {
+      background: rgba(0, 0, 0, 0.04);
+      color: #475569;
+    }
+    body.dark-mode .modal-close-btn:hover {
+      background: rgba(255, 255, 255, 0.05);
+      color: #cbd5e1;
+    }
+
+    /* 弹出卡片主体 */
+    .modal-body {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .detail-label-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .detail-sec-title {
+      font-size: 12px;
+      font-weight: 800;
+      color: #64748b;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    body.dark-mode .detail-sec-title {
+      color: #94a3b8;
+    }
+
+    /* 核心详情展示框 */
+    .detail-text-area {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 14px;
+      font-size: 13px;
+      color: #1e293b;
+      line-height: 1.55;
+      font-weight: 700;
+      font-family: 'Consolas', 'Courier New', monospace;
+      word-break: break-all;
+      max-height: 180px;
+      overflow-y: auto;
+    }
+    body.dark-mode .detail-text-area {
+      background: rgba(0, 0, 0, 0.2);
+      border: 1px solid rgba(255, 255, 255, 0.04);
+      color: #e2e8f0;
+    }
+    .detail-summary {
+      font-size: 12.5px;
+      color: #475569;
+      font-weight: 600;
+      line-height: 1.5;
+    }
+    body.dark-mode .detail-summary {
+      color: #cbd5e1;
+    }
+
+    /* 官方排查计划区 */
+    .modal-fix-section {
+      background: rgba(245, 158, 11, 0.05);
+      border: 1px solid rgba(245, 158, 11, 0.15);
+      border-radius: 10px;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    body.dark-mode .modal-fix-section {
+      background: rgba(245, 158, 11, 0.04);
+      border: 1px solid rgba(251, 191, 36, 0.15);
+    }
+    .doctor-single-card.status-error + .doctor-modal-overlay .modal-fix-section,
+    .doctor-modal-card:has(.badge-error) .modal-fix-section {
+      background: rgba(239, 68, 68, 0.04);
+      border-color: rgba(239, 68, 68, 0.15);
+    }
+    .fix-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: #ea580c;
+    }
+    .doctor-modal-card:has(.badge-error) .fix-header {
+      color: #ef4444;
+    }
+    .fix-body {
+      font-size: 11.5px;
+      color: #7c2d12;
+      line-height: 1.55;
+      font-weight: 750;
+    }
+    body.dark-mode .fix-body {
+      color: #ffedd5;
+    }
+    .doctor-modal-card:has(.badge-error) .fix-body {
+      color: #991b1b;
+    }
+    body.dark-mode .doctor-modal-card:has(.badge-error) .fix-body {
+      color: #fee2e2;
+    }
+
+    /* 弹出卡片脚部 */
+    .modal-footer {
+      display: flex;
+      justify-content: flex-end;
+      border-top: 1px solid rgba(0, 0, 0, 0.05);
+      padding-top: 14px;
+    }
+    body.dark-mode .modal-footer {
+      border-top: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    .close-action-btn {
+      min-width: 100px;
+      justify-content: center;
+    }
+    body.dark-mode .card-icon-mini.text-active {
+      color: #60a5fa !important;
+    }
+
+    /* 二级详情卡片专属高阶业务元素 */
+    .modal-specs-block {
+      background: rgba(0, 0, 0, 0.02);
+      border: 1px solid rgba(0, 0, 0, 0.04);
+      border-radius: 12px;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin-top: 4px;
+    }
+    body.dark-mode .modal-specs-block {
+      background: rgba(255, 255, 255, 0.02);
+      border-color: rgba(255, 255, 255, 0.04);
+    }
+    .specs-header-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .specs-block-title {
+      font-size: 12px;
+      font-weight: 900;
+      color: #1e293b;
+    }
+    body.dark-mode .specs-block-title {
+      color: #cbd5e1;
+    }
+    .specs-block-meta {
+      font-size: 11px;
+      color: #64748b;
+      font-weight: 800;
+    }
+    body.dark-mode .specs-block-meta {
+      color: #94a3b8;
+    }
+
+    /* 规则快照网格与胶囊 */
+    .modal-rules-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      max-height: 120px;
+      overflow-y: auto;
+      padding-right: 4px;
+    }
+    .modal-rule-tag {
+      font-size: 10.5px;
+      font-weight: 800;
+      background: #e0f2fe;
+      color: #0369a1;
+      padding: 4px 8px;
+      border-radius: 6px;
+      border: 1px solid #bae6fd;
+      font-family: 'Consolas', monospace;
+    }
+    body.dark-mode .modal-rule-tag {
+      background: rgba(3, 105, 161, 0.15);
+      color: #7dd3fc;
+      border-color: rgba(3, 105, 161, 0.3);
+    }
+    .modal-rule-tag.tag-more {
+      background: #f1f5f9;
+      color: #475569;
+      border-color: #e2e8f0;
+      font-style: italic;
+    }
+    body.dark-mode .modal-rule-tag.tag-more {
+      background: rgba(255,255,255,0.06);
+      color: #94a3b8;
+      border-color: rgba(255,255,255,0.08);
+    }
+    .modal-empty-tip {
+      font-size: 11.5px;
+      color: #94a3b8;
+      text-align: center;
+      padding: 16px;
+      font-style: italic;
+    }
+
+    /* 物理路径操作行 */
+    .specs-action-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      background: rgba(0, 0, 0, 0.03);
+      padding: 8px 12px;
+      border-radius: 8px;
+    }
+    body.dark-mode .specs-action-row {
+      background: rgba(255, 255, 255, 0.03);
+    }
+    .specs-path-text {
+      font-size: 11px;
+      font-family: 'Consolas', monospace;
+      color: #64748b;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
+      text-align: left;
+    }
+    body.dark-mode .specs-path-text {
+      color: #94a3b8;
+    }
+    .copy-path-btn {
+      flex-shrink: 0;
+      padding: 5px 10px;
+      font-size: 11px;
+      border-radius: 6px;
+    }
+
+    /* 网络探针高频拨测 */
+    .latency-telemetry-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      background: rgba(37, 99, 235, 0.03);
+      border: 1px dashed rgba(37, 99, 235, 0.15);
+      border-radius: 10px;
+      padding: 12px 16px;
+    }
+    body.dark-mode .latency-telemetry-row {
+      background: rgba(59, 130, 246, 0.03);
+      border-color: rgba(59, 130, 246, 0.15);
+    }
+    .latency-number-box {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+    }
+    .modal-latency-number {
+      font-size: 28px;
+      font-weight: 900;
+      color: #2563eb;
+      font-family: 'Outfit', 'Inter', system-ui, sans-serif;
+      line-height: 1.1;
+    }
+    body.dark-mode .modal-latency-number {
+      color: #60a5fa;
+    }
+    .modal-latency-unit {
+      font-size: 10px;
+      font-weight: 800;
+      color: #64748b;
+      margin-top: 2px;
+    }
+    body.dark-mode .modal-latency-unit {
+      color: #94a3b8;
+    }
+    .ping-test-btn {
+      background: linear-gradient(135deg, #10b981 0%, #059669 100%) !important;
+      box-shadow: 0 4px 12px rgba(16, 185, 129, 0.2);
+      font-size: 12px !important;
+      padding: 8px 14px !important;
+      border-radius: 8px !important;
+      border: none !important;
+      color: white !important;
+      font-weight: 900 !important;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    .ping-test-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 16px rgba(16, 185, 129, 0.35);
+    }
+    .ping-test-btn:disabled {
+      background: #94a3b8 !important;
+      box-shadow: none !important;
+      cursor: not-allowed;
+    }
+
+    /* 物理参数遥测对照表 */
+    .telemetry-table {
+      display: flex;
+      flex-direction: column;
+      border: 1px solid rgba(0, 0, 0, 0.05);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    body.dark-mode .telemetry-table {
+      border-color: rgba(255, 255, 255, 0.05);
+    }
+    .telemetry-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 10px 12px;
+      background: white;
+      border-bottom: 1px solid rgba(0, 0, 0, 0.03);
+    }
+    body.dark-mode .telemetry-row {
+      background: rgba(20, 30, 45, 0.4);
+      border-color: rgba(255, 255, 255, 0.03);
+    }
+    .telemetry-row:last-child {
+      border-bottom: none;
+    }
+    .tel-label {
+      font-size: 12px;
+      font-weight: 850;
+      color: #64748b;
+    }
+    body.dark-mode .tel-label {
+      color: #94a3b8;
+    }
+    .tel-value {
+      font-size: 12px;
+      font-weight: 800;
+      color: #1e293b;
+      font-family: 'Consolas', monospace;
+    }
+    body.dark-mode .tel-value {
+      color: #e2e8f0;
+    }
+
+    /* Python 运行时协程配额进度条 */
+    .progress-bar-container {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-top: 4px;
+    }
+    .progress-bar-label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      font-weight: 850;
+      color: #64748b;
+    }
+    body.dark-mode .progress-bar-label {
+      color: #94a3b8;
+    }
+    .progress-bar-track {
+      height: 6px;
+      background: rgba(0, 0, 0, 0.05);
+      border-radius: 99px;
+      overflow: hidden;
+    }
+    body.dark-mode .progress-bar-track {
+      background: rgba(255, 255, 255, 0.05);
+    }
+    .progress-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #3b82f6 0%, #2563eb 100%);
+      border-radius: 99px;
+      transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+    }
     .topbar {
       height: 64px;
       margin: 0;

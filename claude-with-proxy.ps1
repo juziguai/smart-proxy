@@ -6,9 +6,66 @@ $ProgressPreference = "SilentlyContinue"
 $CLAUDE_PROJECT_DIR = "<你的Claude Code项目目录>"
 $PYTHON_PATH         = "<Python路径>\python.exe"
 $SMART_PROXY_DIR     = "<smart-proxy项目目录>"
+$LOCALMEMORY_MCP_CMD = "<LocalMemory MCP cmd路径>"
+$CLAUDE_SLIM_MCP_CONFIG = Join-Path $env:USERPROFILE ".claude\mcp-slim.json"
 # =====================
 
 Set-Location $CLAUDE_PROJECT_DIR
+
+function Initialize-SlimMcpConfig {
+    if (-not $LOCALMEMORY_MCP_CMD -or $LOCALMEMORY_MCP_CMD -like "<*") {
+        return $null
+    }
+
+    $configDir = Split-Path -Parent $CLAUDE_SLIM_MCP_CONFIG
+    New-Item -ItemType Directory -Force -Path $configDir | Out-Null
+
+    $config = [ordered]@{
+        mcpServers = [ordered]@{
+            localmemory = [ordered]@{
+                type = "stdio"
+                command = "cmd"
+                args = @("/c", $LOCALMEMORY_MCP_CMD)
+                env = @{}
+            }
+        }
+    }
+
+    $json = $config | ConvertTo-Json -Depth 8
+    [System.IO.File]::WriteAllText($CLAUDE_SLIM_MCP_CONFIG, $json, [System.Text.UTF8Encoding]::new($false))
+    return $CLAUDE_SLIM_MCP_CONFIG
+}
+
+function Get-ClaudeMcpArgs {
+    param(
+        [string[]]$ExtraArgs = @()
+    )
+
+    if ($env:CLAUDE_FULL_MCP -eq "1") {
+        Write-Host "[mcp] 完整模式: 使用全局 MCP 配置。" -ForegroundColor DarkGray
+        return @()
+    }
+
+    foreach ($arg in @($ExtraArgs)) {
+        if ($arg -in @("-h", "--help", "-v", "--version", "mcp", "plugin", "plugins", "agents", "auth", "doctor", "project", "setup-token", "install", "update", "upgrade")) {
+            Write-Host "[mcp] 检测到 Claude 管理命令，跳过精简 MCP 注入。" -ForegroundColor DarkGray
+            return @()
+        }
+        if ($arg -in @("--mcp-config", "--strict-mcp-config", "--bare")) {
+            Write-Host "[mcp] 检测到自定义 MCP/裸模式参数，跳过精简 MCP 注入。" -ForegroundColor DarkGray
+            return @()
+        }
+    }
+
+    $configPath = Initialize-SlimMcpConfig
+    if (-not $configPath) {
+        Write-Host "[mcp] 未配置 LocalMemory MCP，使用全局 MCP 配置。" -ForegroundColor DarkGray
+        return @()
+    }
+
+    Write-Host "[mcp] 精简模式: 仅加载 LocalMemory；临时完整 MCP 可先设置 CLAUDE_FULL_MCP=1。" -ForegroundColor DarkGray
+    return @("--strict-mcp-config", "--mcp-config=$configPath")
+}
 
 function Test-LocalPort {
     param(
@@ -217,6 +274,12 @@ function Test-ModelProviderHealth {
         elseif (($statusCode -eq 401) -or ($statusCode -eq 403)) {
             $status = "auth_error"
         }
+        elseif (($statusCode -eq 400) -or $lowerDetail.Contains("param incorrect") -or $lowerDetail.Contains("not supported model")) {
+            $status = "param_error"
+        }
+        elseif (($statusCode -and $statusCode -ge 500) -or $lowerDetail.Contains("bad gateway")) {
+            $status = "upstream_error"
+        }
 
         Write-ProviderHealthStatus -Provider $Provider -Ok $false -Status $status -Detail "HTTP $statusCode $detail"
         if ($status -eq "quota_exhausted") {
@@ -228,9 +291,17 @@ function Test-ModelProviderHealth {
             Write-Host "[model-check] $($Provider.Label): 鉴权失败，检查 API Key。" -ForegroundColor Red
             return $false
         }
+        if ($status -eq "param_error") {
+            Write-Host "[model-check] $($Provider.Label): 参数不被上游接受，已阻止启动。" -ForegroundColor Red
+            return $false
+        }
+        if ($status -eq "upstream_error") {
+            Write-Host "[model-check] $($Provider.Label): 上游网关异常 HTTP $statusCode，已阻止启动，避免进入失败重试。" -ForegroundColor Red
+            return $false
+        }
 
-        Write-Host "[model-check] $($Provider.Label): 健康检查未通过，继续启动；详情已写入 dashboard Doctor。" -ForegroundColor Yellow
-        return $true
+        Write-Host "[model-check] $($Provider.Label): 健康检查未通过，已阻止启动；详情已写入 dashboard Doctor。" -ForegroundColor Yellow
+        return $false
     }
 }
 
@@ -336,8 +407,9 @@ $providers = @{
 # 如果带了参数，直接透传，跳过菜单
 if ($args.Count -gt 0) {
     Set-ModelProvider $providers["1"]
+    $mcpArgs = Get-ClaudeMcpArgs -ExtraArgs $args
     Write-Host "直接启动: claude $args" -ForegroundColor Yellow
-    & claude @args
+    & claude @mcpArgs @args
     return
 }
 
@@ -356,6 +428,7 @@ if (-not $providers.ContainsKey($modelChoice)) {
     $modelChoice = "1"
 }
 Set-ModelProvider $providers[$modelChoice]
+$mcpArgs = Get-ClaudeMcpArgs
 
 Write-Host "=== 选择启动模式 ===" -ForegroundColor Cyan
 Write-Host ""
@@ -377,13 +450,13 @@ $choice = Read-Host "输入序号 (1/2/3，默认 2)"
 switch ($choice) {
     "1" {
         Write-Host "安全模式启动..." -ForegroundColor Yellow
-        & claude
+        & claude @mcpArgs
     }
     "3" {
         Write-Host "恢复历史会话..." -ForegroundColor Yellow
-        & claude --dangerously-skip-permissions --resume
+        & claude @mcpArgs --dangerously-skip-permissions --resume
     }
     default {
-        & claude --dangerously-skip-permissions
+        & claude @mcpArgs --dangerously-skip-permissions
     }
 }

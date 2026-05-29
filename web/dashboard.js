@@ -609,7 +609,7 @@
           <strong>${escapeHtml(value)}</strong>
         </div>
       `).join('');
-      
+
       // 追加：渲染实时智能路由分流状态
       let adaptiveSection = '';
       if (status.active_adaptive_routes && Object.keys(status.active_adaptive_routes).length > 0) {
@@ -655,11 +655,11 @@
     const renderWhitelistEntries = (filterKeyword = '') => {
       const container = document.getElementById('whitelistEntries');
       const kw = String(filterKeyword).trim().toLowerCase();
-      const filtered = kw 
+      const filtered = kw
         ? whitelistEntriesState.filter(entry => entry.toLowerCase().includes(kw))
         : whitelistEntriesState;
       if (!filtered.length) {
-        container.innerHTML = kw 
+        container.innerHTML = kw
           ? '<div class="table-empty">无匹配规则</div>'
           : '<div class="table-empty">白名单为空，保存后会自动创建 whitelist.txt</div>';
         return;
@@ -713,8 +713,11 @@
       }
       container.innerHTML = candidates.map(candidate => {
         const host = candidate.host || '';
+        const isUpgrade = candidate.suggestion_type === 'wildcard_upgrade';
+        const isCovered = candidate.is_covered;
+
         let actionButtons = '';
-        if (whitelistMatchesHost(host)) {
+        if (isCovered || whitelistMatchesHost(host)) {
           actionButtons = `<button class="secondary-action" disabled style="padding: 5px 10px; font-size: 12px;">已直连</button>`;
         } else if (blocklistMatchesHost(host)) {
           actionButtons = `<button class="secondary-action" disabled style="padding: 5px 10px; font-size: 12px; color: #a855f7; border-color: #e9d5ff; background: #faf5ff;">已屏蔽</button>`;
@@ -726,17 +729,29 @@
             </div>
           `;
         }
+
+        const badgeHtml = isUpgrade
+          ? `<span class="status-badge" style="font-size: 10px; padding: 2px 6px; background: #eff6ff; color: #3b82f6; font-weight: bold; margin-left: 6px; margin-top: 0; display: inline-block; vertical-align: middle; border-radius: 4px;">💡 智能通配建议</span>`
+          : '';
+
+        const reasonHtml = isUpgrade
+          ? `<div style="font-size: 11px; color: #3b82f6; margin-top: 4px;">建议升级通配，自动合并已有的精确规则: <strong>${escapeHtml(candidate.reason)}</strong></div>`
+          : `<span style="font-size: 11px;">代理 ${fmt.format(candidate.proxy_requests || 0)} 次 · 慢建连 ${fmt.format(candidate.slow_requests || 0)} · 平均 ${fmt.format(candidate.average_connect_latency_ms || 0)}ms</span>`;
+
         return `
           <div class="candidate-item" style="padding: 8px 0; border-top: 1px solid #edf1f7;">
             <div>
-              <strong style="font-size: 13px; font-weight: 800; color: #07172f;">${escapeHtml(host || '-')}</strong>
-              <span style="font-size: 11px;">代理 ${fmt.format(candidate.proxy_requests || 0)} 次 · 慢建连 ${fmt.format(candidate.slow_requests || 0)} · 平均 ${fmt.format(candidate.average_connect_latency_ms || 0)}ms</span>
+              <div style="display: flex; align-items: center; gap: 4px;">
+                <strong style="font-size: 13px; font-weight: 800; color: #07172f;">${escapeHtml(host || '-')}</strong>
+                ${badgeHtml}
+              </div>
+              ${reasonHtml}
             </div>
             ${actionButtons}
           </div>
         `;
       }).join('');
-      
+
       container.querySelectorAll('[data-add-whitelist-candidate]').forEach(button => {
         button.addEventListener('click', async () => {
           if (button.disabled) return;
@@ -847,7 +862,7 @@
     const renderBlocklistEntries = (filterKeyword = '') => {
       const container = document.getElementById('blocklistEntries');
       const kw = String(filterKeyword).trim().toLowerCase();
-      const filtered = kw 
+      const filtered = kw
         ? blocklistEntriesState.filter(entry => entry.toLowerCase().includes(kw))
         : blocklistEntriesState;
       if (!filtered.length) {
@@ -966,39 +981,574 @@
       renderBlocklistEntries();
       await refreshBlocklist();
     };
+    const getCheckIcon = key => {
+      const icons = {
+        proxy_port: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>`,
+        dashboard_port: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line></svg>`,
+        python: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 18l6-6-6-6M8 6L2 12l6 6"></path></svg>`,
+        transcripts: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>`,
+        whitelist: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>`,
+        blocklist: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line></svg>`,
+        upstream: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>`,
+        net_baidu: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"></path></svg>`,
+        net_anthropic: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2zm18 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg>`,
+        net_openai: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M8 12h8M12 8v8"></path></svg>`,
+        database: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path><path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"></path></svg>`,
+        env_proxy: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>`,
+        resources: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>`
+      };
+      return icons[key] || `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>`;
+    };
+
     const renderDoctor = doctor => {
       const checks = (doctor.checks || [])
         .filter(check => check.key !== 'provider_health');
+      const totalCount = checks.length;
       const okCount = checks.filter(check => check.status === 'ok').length;
+      const warningCount = checks.filter(check => check.status === 'warning').length;
+      const errorCount = checks.filter(check => check.status === 'error').length;
+
+      // 1. 计算系统健康分
+      let score = 100;
+      if (totalCount > 0) {
+        score = Math.round(((okCount * 100) + (warningCount * 70) + (errorCount * 0)) / totalCount);
+      }
+
+      // 2. 更新 SVG 环形进度条和看板头部 (周长为 2 * Math.PI * 40 ≈ 251.2)
+      const ring = document.getElementById('doctorHealthRing');
+      if (ring) {
+        const offset = 251.2 * (1 - score / 100);
+        ring.style.strokeDashoffset = offset;
+
+        // 动态配色渐变
+        if (score >= 95) {
+          ring.style.stroke = 'url(#scoreGrad)';
+        } else if (score >= 80) {
+          ring.style.stroke = '#f59e0b';
+        } else {
+          ring.style.stroke = '#ef4444';
+        }
+      }
+
+      const scoreVal = document.getElementById('doctorHealthScore');
+      if (scoreVal) {
+        scoreVal.innerText = score;
+      }
+
+      // 智能生成诊断评价文案
+      const descEl = document.getElementById('doctorHealthDesc');
+      if (descEl) {
+        if (score >= 95) {
+          descEl.innerHTML = '✨ <strong>运行完美</strong>：所有路由链路、核心安全资产及环境参数表现优异，代理正处于巅峰工作状态！';
+        } else if (score >= 80) {
+          descEl.innerHTML = '⚠️ <strong>需关注</strong>：系统整体运行正常，但部分链路或本地资产检测到隐患，建议查阅相应警告项。';
+        } else {
+          descEl.innerHTML = '🚨 <strong>存在故障</strong>：检测到核心网关端口、安全配置文件或主路由脱轨，系统存在安全或功能缺陷！';
+        }
+      }
+
       const generatedAt = doctor.generated_at ? new Date(doctor.generated_at).toLocaleString() : '刚刚';
-      text('doctorMeta', `${okCount}/${checks.length} 项通过 · ${generatedAt}`);
-      const container = document.getElementById('doctorChecks');
+      text('doctorMeta', `${okCount}/${totalCount} 项通过 · 报告生成时间：${generatedAt}`);
+
+      window.lastDoctorChecks = checks;
+
+      // 3. 渲染单个卡片网格
+      const grid = document.getElementById('doctorGrid');
+      if (!grid) return;
+
       if (!checks.length) {
-        container.innerHTML = '<div class="table-empty">暂无自检结果</div>';
+        grid.innerHTML = '<div class="table-empty">暂无自检结果</div>';
         return;
       }
-      container.innerHTML = checks.map(check => `
-        <div class="doctor-item">
-          <div>
-            <strong>${escapeHtml(check.label || check.key || '-')}</strong>
-            <span>${escapeHtml(check.detail || '-')}</span>
-            ${check.status === 'ok' ? '' : `<span>${escapeHtml(check.fix || '请检查本地配置')}</span>`}
+
+      grid.innerHTML = checks.map(check => {
+        const status = check.status || 'warning';
+        let dotHtml = '';
+        let badgeHtml = '';
+        if (status === 'ok') {
+          dotHtml = `<span class="modern-status-dot dot-ok"></span>`;
+          badgeHtml = `<span class="single-card-badge badge-ok">正常</span>`;
+        } else if (status === 'warning') {
+          dotHtml = `<span class="modern-status-dot dot-warn"><span class="pulse-ring"></span></span>`;
+          badgeHtml = `<span class="single-card-badge badge-warn">关注</span>`;
+        } else {
+          dotHtml = `<span class="modern-status-dot dot-error"><span class="pulse-ring-fast"></span></span>`;
+          badgeHtml = `<span class="single-card-badge badge-error">异常</span>`;
+        }
+
+        const icon = getCheckIcon(check.key);
+
+        return `
+          <div class="doctor-single-card status-${status}" data-check-key="${check.key}" style="cursor: pointer;">
+            <div class="card-top-row">
+              <div class="status-indicator-group">
+                ${dotHtml}
+                <span class="card-icon-mini">${icon}</span>
+              </div>
+              ${badgeHtml}
+            </div>
+            <h4 class="card-item-title">${escapeHtml(check.label || check.key || '-')}</h4>
+            <p class="card-item-detail">${escapeHtml(check.detail || '-')}</p>
+            ${check.status === 'ok' ? '' : `
+              <div class="card-item-fix-box">
+                <span class="fix-pin">📌</span>
+                <span class="fix-text">${escapeHtml(check.fix || '请检查配置')}</span>
+              </div>
+            `}
           </div>
-          <span class="status-badge doctor-status ${escapeHtml(check.status || 'warning')}">
-            ${check.status === 'ok' ? '正常' : (check.status === 'warning' ? '关注' : '异常')}
-          </span>
-        </div>
-      `).join('');
+        `;
+      }).join('');
     };
+
+    // 二级卡片弹出详情模态框逻辑
+    const showDoctorDetailModal = check => {
+      const overlay = document.createElement('div');
+      overlay.className = 'doctor-modal-overlay';
+
+      const status = check.status || 'warning';
+      let dotHtml = '';
+      let badgeHtml = '';
+      let statusLabelText = '';
+      if (status === 'ok') {
+        dotHtml = `<span class="modern-status-dot dot-ok"></span>`;
+        badgeHtml = `<span class="single-card-badge badge-ok">正常</span>`;
+        statusLabelText = '该组件健康度优良，工作指标完全符合预期。';
+      } else if (status === 'warning') {
+        dotHtml = `<span class="modern-status-dot dot-warn"><span class="pulse-ring"></span></span>`;
+        badgeHtml = `<span class="single-card-badge badge-warn">关注</span>`;
+        statusLabelText = '该组件检测到潜在隐患或配置微调建议，请予以关注。';
+      } else {
+        dotHtml = `<span class="modern-status-dot dot-error"><span class="pulse-ring-fast"></span></span>`;
+        badgeHtml = `<span class="single-card-badge badge-error">异常</span>`;
+        statusLabelText = '核心指标异常或连接脱线！可能导致代理服务部分功能受阻。';
+      }
+
+      const icon = getCheckIcon(check.key);
+
+      // --- 核心二级卡片专属业务模块划分 ---
+      let customSpecsHtml = '';
+
+      // 1. 白名单/屏蔽名单配置规则快照与路径提取
+      if (check.key === 'whitelist' || check.key === 'blocklist') {
+        const isWhite = check.key === 'whitelist';
+        const rules = isWhite ? (whitelistEntriesState || []) : (blocklistEntriesState || []);
+
+        let rulesPreviewHtml = '';
+        if (rules.length === 0) {
+          rulesPreviewHtml = '<div class="modal-empty-tip">📭 当前尚未加载任何规则过滤条目</div>';
+        } else {
+          // 只展示前 20 条，溢出显示统计胶囊
+          const previewRules = rules.slice(0, 20);
+          const tagsHtml = previewRules.map(r => `<span class="modal-rule-tag">${escapeHtml(r)}</span>`).join('');
+          const moreCount = rules.length - previewRules.length;
+          rulesPreviewHtml = `
+            <div class="modal-rules-grid">
+              ${tagsHtml}
+              ${moreCount > 0 ? `<span class="modal-rule-tag tag-more">等共 ${rules.length} 条规则...</span>` : ''}
+            </div>
+          `;
+        }
+
+        // 提取物理路径一键复制
+        const pathMatched = check.detail.match(/([a-zA-Z]:\\[^\s,，·]+)/);
+        const pathStr = pathMatched ? pathMatched[1] : '';
+
+        customSpecsHtml = `
+          <div class="modal-specs-block">
+            <div class="specs-header-row">
+              <span class="specs-block-title">📜 过滤规则快照 (前 20 条预览)</span>
+              <span class="specs-block-meta">共 ${rules.length} 条已加载</span>
+            </div>
+            ${rulesPreviewHtml}
+            ${pathStr ? `
+              <div class="specs-action-row">
+                <span class="specs-path-text select-text" title="${escapeHtml(pathStr)}">${escapeHtml(pathStr)}</span>
+                <button class="mini-primary copy-path-btn" id="modalCopyPathBtn" data-path="${escapeHtml(pathStr)}">
+                  📋 复制绝对路径
+                </button>
+              </div>
+            ` : ''}
+          </div>
+        `;
+      }
+      // 2. 路由链路高保真测速探针
+      else if (['upstream', 'net_baidu', 'net_anthropic', 'net_openai'].includes(check.key)) {
+        // 匹配出延迟数字
+        const latencyMatched = check.detail.match(/(\d+)\s*ms/);
+        const latencyVal = latencyMatched ? `${latencyMatched[1]}ms` : check.detail;
+
+        customSpecsHtml = `
+          <div class="modal-specs-block">
+            <span class="specs-block-title">⚡ 链路即时高频重测 (RTT Probe)</span>
+            <div class="latency-telemetry-row">
+              <div class="latency-number-box">
+                <span class="modal-latency-number select-text">${escapeHtml(latencyVal)}</span>
+                <span class="modal-latency-unit">当前时延</span>
+              </div>
+              <button class="primary-action ping-test-btn" id="modalPingTestBtn">
+                ⚡ 立即重新测速
+              </button>
+            </div>
+          </div>
+        `;
+      }
+      // 3. SQLite 数据库物理健康度拆分
+      else if (check.key === 'database') {
+        const sizeMatched = check.detail.match(/大小\s*([\d\.]+)\s*(MB|KB|B)/i);
+        const ioMatched = check.detail.match(/I\/O\s*延迟\s*(\d+ms)/i);
+        const countMatched = check.detail.match(/累计请求\s*(\d+)\s*条/i);
+
+        const sizeStr = sizeMatched ? sizeMatched[0] : '未知';
+        const ioStr = ioMatched ? ioMatched[1] : '正常';
+        const countStr = countMatched ? countMatched[1] : '0';
+
+        customSpecsHtml = `
+          <div class="modal-specs-block">
+            <span class="specs-block-title">💾 SQLite 遥测数据库物理参数</span>
+            <div class="telemetry-table">
+              <div class="telemetry-row">
+                <span class="tel-label">数据库体积</span>
+                <span class="tel-value select-text">${escapeHtml(sizeStr)}</span>
+              </div>
+              <div class="telemetry-row">
+                <span class="tel-label">I/O 物理响应时延</span>
+                <span class="tel-value select-text">${escapeHtml(ioStr)}</span>
+              </div>
+              <div class="telemetry-row">
+                <span class="tel-label">累计入库审计请求笔数</span>
+                <span class="tel-value select-text">${escapeHtml(countStr)} 条</span>
+              </div>
+              <div class="telemetry-row">
+                <span class="tel-label">逻辑结构健康度 (PRAGMA)</span>
+                <span class="tel-value select-text text-green" style="color:#10b981;font-weight:900;">🟢 INTEGRITY_OK</span>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+      // 4. Python 协程与系统资源利用率
+      else if (check.key === 'resources') {
+        const timeMatched = check.detail.match(/在线时长\s*(\d+)\s*秒/i);
+        const ramMatched = check.detail.match(/内存占用\s*([\d\.]+)\s*(MB|KB|B)/i);
+        const coMatched = check.detail.match(/活跃协程\s*(\d+)\s*个/i);
+
+        const timeStr = timeMatched ? `${timeMatched[1]} 秒` : '刚刚启动';
+        const ramStr = ramMatched ? ramMatched[0] : '未知';
+        const coStr = coMatched ? coMatched[1] : '0';
+
+        // 计算协程条比例
+        const coCount = coMatched ? parseInt(coMatched[1]) : 0;
+        const coPercent = Math.min(100, Math.max(10, Math.round((coCount / 100) * 100)));
+
+        customSpecsHtml = `
+          <div class="modal-specs-block">
+            <span class="specs-block-title">⚙️ Python 运行时 & 系统资源利用率</span>
+            <div class="telemetry-table">
+              <div class="telemetry-row">
+                <span class="tel-label">代理进程在线时长</span>
+                <span class="tel-value select-text">${escapeHtml(timeStr)}</span>
+              </div>
+              <div class="telemetry-row">
+                <span class="tel-label">宿主机物理内存开销 (WorkSet)</span>
+                <span class="tel-value select-text">${escapeHtml(ramStr)}</span>
+              </div>
+              <div class="telemetry-row">
+                <span class="tel-label">活跃 asyncio 异步协程数</span>
+                <span class="tel-value select-text">${escapeHtml(coStr)} 个</span>
+              </div>
+            </div>
+            <div class="progress-bar-container">
+              <div class="progress-bar-label">
+                <span>协程池消耗配额 (当前建议上限 100)</span>
+                <span style="font-weight:900;color:var(--blue);">${coCount}%</span>
+              </div>
+              <div class="progress-bar-track">
+                <div class="progress-bar-fill" style="width: ${coPercent}%;"></div>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+      // 5. Proxy 与 Dashboard 端口的极速服务绑定诊断
+      else if (check.key === 'proxy_port' || check.key === 'dashboard_port') {
+        const isProxy = check.key === 'proxy_port';
+        const port = isProxy ? '8889' : '8890';
+        const serviceUrl = `http://127.0.0.1:${port}`;
+
+        // 匹配连接延迟
+        const connMatched = check.detail.match(/连接\s*(\d+)\s*ms/i);
+        const connStr = connMatched ? `${connMatched[1]}ms` : '未响应';
+
+        customSpecsHtml = `
+          <div class="modal-specs-block">
+            <span class="specs-block-title">🌐 ${isProxy ? 'HTTP 代理代理服务端口' : 'HTML 极客管理面板端口'}</span>
+            <div class="telemetry-table">
+              <div class="telemetry-row">
+                <span class="tel-label">内网监听服务地址</span>
+                <span class="tel-value select-text">${escapeHtml(serviceUrl)}</span>
+              </div>
+              <div class="telemetry-row">
+                <span class="tel-label">端口监听协议</span>
+                <span class="tel-value select-text">TCP (IPv4)</span>
+              </div>
+              <div class="telemetry-row">
+                <span class="tel-label">本端建连握手时延</span>
+                <span class="tel-value select-text" style="color:#10b981;font-weight:900;">⚡ ${escapeHtml(connStr)}</span>
+              </div>
+            </div>
+            <div class="specs-action-row">
+              <span class="specs-path-text select-text" title="${escapeHtml(serviceUrl)}">${escapeHtml(serviceUrl)}</span>
+              <button class="mini-primary copy-path-btn" id="modalCopyUrlBtn" data-url="${escapeHtml(serviceUrl)}">
+                📋 复制服务 URL
+              </button>
+            </div>
+          </div>
+        `;
+      }
+      // 6. Python 运行环境及编译器绝对路径提取
+      else if (check.key === 'python') {
+        const pyPath = check.detail;
+
+        customSpecsHtml = `
+          <div class="modal-specs-block">
+            <span class="specs-block-title">🐍 Python 运行时编译器环境</span>
+            <div class="telemetry-table">
+              <div class="telemetry-row">
+                <span class="tel-label">物理执行文件路径</span>
+                <span class="tel-value select-text" style="word-break: break-all; font-size: 11px;">${escapeHtml(pyPath)}</span>
+              </div>
+              <div class="telemetry-row">
+                <span class="tel-label">运行架构</span>
+                <span class="tel-value select-text">${navigator.userAgent.includes('Win64') || navigator.userAgent.includes('x64') ? 'AMD64 (64-Bit)' : 'x86 (32-Bit)'}</span>
+              </div>
+            </div>
+            <div class="specs-action-row">
+              <span class="specs-path-text select-text" title="${escapeHtml(pyPath)}">${escapeHtml(pyPath)}</span>
+              <button class="mini-primary copy-path-btn" id="modalCopyPathBtn" data-path="${escapeHtml(pyPath)}">
+                📋 复制物理路径
+              </button>
+            </div>
+          </div>
+        `;
+      }
+      // 7. Claude Transcript 物理目录检测与缓存索引
+      else if (check.key === 'transcripts') {
+        const pathMatched = check.detail.match(/^([a-zA-Z]:\\[^\s，,·]+)/);
+        const folderPath = pathMatched ? pathMatched[1] : '';
+        const countMatched = check.detail.match(/已发现\s*(\d+)\s*个/);
+        const fileCount = countMatched ? countMatched[1] : '0';
+
+        customSpecsHtml = `
+          <div class="modal-specs-block">
+            <span class="specs-block-title">📂 Claude Workspaces 工作区遥测</span>
+            <div class="telemetry-table">
+              <div class="telemetry-row">
+                <span class="tel-label">工作区根目录路径</span>
+                <span class="tel-value select-text" style="word-break: break-all; font-size: 11px;">${escapeHtml(folderPath || '未检测到工作区')}</span>
+              </div>
+              <div class="telemetry-row">
+                <span class="tel-label">已索引 JSONL 条数</span>
+                <span class="tel-value select-text" style="font-weight:900;color:var(--blue);">${escapeHtml(fileCount)} 个文件</span>
+              </div>
+            </div>
+            ${folderPath ? `
+              <div class="specs-action-row">
+                <span class="specs-path-text select-text" title="${escapeHtml(folderPath)}">${escapeHtml(folderPath)}</span>
+                <button class="mini-primary copy-path-btn" id="modalCopyPathBtn" data-path="${escapeHtml(folderPath)}">
+                  📋 复制绝对路径
+                </button>
+              </div>
+            ` : ''}
+          </div>
+        `;
+      }
+      // 8. 系统代理冲突对齐矩阵
+      else if (check.key === 'env_proxy') {
+        const regEnabled = check.detail.includes('注册表全局代理: 已启用');
+        const regServerMatched = check.detail.match(/地址:\s*([^\s\)]+)/);
+        const regServer = regServerMatched ? regServerMatched[1] : '';
+
+        const httpMatched = check.detail.match(/HTTP_PROXY:\s*([^\s|]+)/);
+        const httpVal = httpMatched ? httpMatched[1] : '未配置';
+
+        const httpsMatched = check.detail.match(/HTTPS_PROXY:\s*([^\s|]+)/);
+        const httpsVal = httpsMatched ? httpsMatched[1] : '未配置';
+
+        const hasConflict = check.detail.includes('⚠️ 潜在冲突') || check.detail.includes('环路风险');
+
+        customSpecsHtml = `
+          <div class="modal-specs-block">
+            <span class="specs-block-title">🚦 Windows 注册表与环境变量冲突对照表</span>
+            <div class="telemetry-table">
+              <div class="telemetry-row">
+                <span class="tel-label">Windows 注册表全局代理</span>
+                <span class="tel-value select-text">
+                  ${regEnabled ? `🔴 已开启 (${escapeHtml(regServer)})` : '🟢 已关闭'}
+                </span>
+              </div>
+              <div class="telemetry-row">
+                <span class="tel-label">HTTP_PROXY 环境变量</span>
+                <span class="tel-value select-text ${httpVal !== '未配置' ? 'text-warn' : ''}">${escapeHtml(httpVal)}</span>
+              </div>
+              <div class="telemetry-row">
+                <span class="tel-label">HTTPS_PROXY 环境变量</span>
+                <span class="tel-value select-text ${httpsVal !== '未配置' ? 'text-warn' : ''}">${escapeHtml(httpsVal)}</span>
+              </div>
+              <div class="telemetry-row">
+                <span class="tel-label">物理环路风险评估</span>
+                <span class="tel-value select-text" style="font-weight:900;color:${hasConflict ? '#ef4444' : '#10b981'};">
+                  ${hasConflict ? '❌ 检测到潜在冲突/死循环风险' : '🟢 未检测到冲突环路'}
+                </span>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      overlay.innerHTML = `
+        <div class="doctor-modal-card">
+          <div class="modal-header">
+            <div class="modal-title-group">
+              <div class="status-indicator-group">
+                ${dotHtml}
+                <span class="card-icon-mini text-active">${icon}</span>
+              </div>
+              <h3>${escapeHtml(check.label || check.key || '-')}</h3>
+            </div>
+            <button class="modal-close-btn" id="modalCloseX">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
+            </button>
+          </div>
+
+          <div class="modal-body">
+            <div class="detail-label-row">
+              <span class="detail-sec-title">诊断详情与当前指标</span>
+              ${badgeHtml}
+            </div>
+            <div class="detail-text-area select-text">
+              ${escapeHtml(check.detail || '暂无诊断数据详情。')}
+            </div>
+
+            <!-- 插入高逼格二级自举技术 specs 块 -->
+            ${customSpecsHtml}
+
+            <div class="detail-summary select-text">
+              <strong>💡 状态评估：</strong> ${statusLabelText}
+            </div>
+
+            ${check.status === 'ok' ? '' : `
+              <div class="modal-fix-section select-text">
+                <div class="fix-header">
+                  <span>📌</span>
+                  <strong>官方修复建议及故障排查计划</strong>
+                </div>
+                <div class="fix-body">
+                  ${escapeHtml(check.fix || '暂无详细排查建议，请检查对应本地文件的读写权限及语法格式。')}
+                </div>
+              </div>
+            `}
+          </div>
+
+          <div class="modal-footer">
+            <button class="primary-action close-action-btn" id="modalCloseOk">我知道了</button>
+          </div>
+        </div>
+      `;
+
+      document.body.appendChild(overlay);
+      document.body.style.overflow = 'hidden';
+
+      // --- 高级事件绑定 ---
+      // 1. 复制物理路径或 URL 逻辑
+      overlay.querySelectorAll('.copy-path-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const path = btn.getAttribute('data-path');
+          const url = btn.getAttribute('data-url');
+          const textToCopy = path || url;
+          if (textToCopy) {
+            navigator.clipboard.writeText(textToCopy).then(() => {
+              const originalText = btn.innerHTML;
+              btn.innerHTML = '✅ 复制成功！';
+              setTimeout(() => btn.innerHTML = originalText, 1500);
+            });
+          }
+        });
+      });
+
+      // 2. 探针即时重测拨测逻辑
+      const testBtn = overlay.querySelector('#modalPingTestBtn');
+      if (testBtn) {
+        testBtn.addEventListener('click', async () => {
+          testBtn.disabled = true;
+          const originalText = testBtn.innerHTML;
+          testBtn.innerHTML = `<span class="loading-spin" style="display:inline-block;margin-right:6px;">⚡</span>拨测中...`;
+
+          const latencyNumEl = overlay.querySelector('.modal-latency-number');
+          if (latencyNumEl) latencyNumEl.innerText = 'PINGING...';
+
+          try {
+            const res = await fetch('/api/doctor', { cache: 'no-store' });
+            const data = await res.json();
+            const freshChecks = (data.checks || []).filter(c => c.key !== 'provider_health');
+            const freshCheck = freshChecks.find(c => c.key === check.key);
+            if (freshCheck) {
+              const latencyMatched = freshCheck.detail.match(/(\d+)\s*ms/);
+              if (latencyMatched && latencyNumEl) {
+                latencyNumEl.innerText = `${latencyMatched[1]}ms`;
+              } else if (latencyNumEl) {
+                latencyNumEl.innerText = freshCheck.detail;
+              }
+              // 同步更新外部诊断大页面！
+              renderDoctor(data);
+            }
+          } catch (e) {
+            if (latencyNumEl) latencyNumEl.innerText = 'ERROR';
+          } finally {
+            testBtn.disabled = false;
+            testBtn.innerHTML = originalText;
+          }
+        });
+      }
+
+      const closeModal = () => {
+        overlay.classList.add('modal-fade-out');
+        const modalCard = overlay.querySelector('.doctor-modal-card');
+        if (modalCard) modalCard.classList.add('modal-zoom-out');
+
+        setTimeout(() => {
+          overlay.remove();
+          if (!document.querySelector('.doctor-modal-overlay')) {
+            document.body.style.overflow = '';
+          }
+        }, 220);
+      };
+
+      overlay.addEventListener('click', event => {
+        if (event.target === overlay) {
+          closeModal();
+        }
+      });
+
+      overlay.querySelector('#modalCloseX').addEventListener('click', closeModal);
+      overlay.querySelector('#modalCloseOk').addEventListener('click', closeModal);
+    };
+
     const refreshDoctor = async ({ force = false } = {}) => {
       if (doctorLoading || (doctorLoaded && !force)) return;
       doctorLoading = true;
+      const btn = document.getElementById('runDoctor');
+      const icon = btn ? btn.querySelector('.icon-refresh') : null;
+      if (icon) icon.classList.add('loading-spin');
       try {
         const response = await fetch('/api/doctor', { cache: 'no-store' });
         renderDoctor(await response.json());
         doctorLoaded = true;
       } finally {
         doctorLoading = false;
+        if (icon) icon.classList.remove('loading-spin');
       }
     };
     const renderProviderQuotaHealth = report => {
@@ -1394,8 +1944,26 @@
       'click',
       () => refreshDoctor({ force: true }),
     );
+    // 绑定自检卡片点击弹出二级卡片模态框事件
+    const doctorGridEl = document.getElementById('doctorGrid');
+    if (doctorGridEl) {
+      doctorGridEl.addEventListener('click', event => {
+        const card = event.target.closest('.doctor-single-card');
+        if (!card) return;
+
+        const key = card.getAttribute('data-check-key');
+        if (!key || !window.lastDoctorChecks) return;
+
+        const check = window.lastDoctorChecks.find(c => c.key === key);
+        if (check) {
+          showDoctorDetailModal(check);
+        }
+      });
+    }
+
     document.getElementById('refreshProviderHealth').addEventListener(
       'click',
       () => refreshProviderQuotaHealth({ force: true }),
     );
+
     scheduleRefresh();

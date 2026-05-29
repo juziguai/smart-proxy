@@ -753,8 +753,21 @@ async def relay_remote_to_client(src_reader, dst_writer, tracker):
 
 
 
+def _enable_nodelay(writer):
+    """Enable TCP_NODELAY when the transport exposes a socket."""
+    try:
+        sock = writer.get_extra_info("socket")
+        if sock:
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    except Exception as exc:
+        profiler_logger.debug(f"TCP_NODELAY setup skipped: {exc}")
+
+
 async def connect_to(host, port, timeout=5):
-    return await asyncio.wait_for(asyncio.open_connection(host, port), timeout)
+    r, w = await asyncio.wait_for(asyncio.open_connection(host, port), timeout)
+    _enable_nodelay(w)
+    return r, w
+
 
 
 def elapsed_ms(start_monotonic):
@@ -1193,6 +1206,11 @@ def record_route_metrics(host: str, route: str, latency_ms: float, success: bool
             else:
                 consecutive_failures = 0
                 
+        # 如果域名在白名单中且本次请求是成功的，哪怕全生命周期时间超过 3000ms 也绝对不算“直连质量崩溃”
+        is_whitelisted = whitelist.match(host) if host else False
+        if is_whitelisted and success:
+            return
+
         # 判定 A: 直连发生极其严重的超时 (时延 >= 3000ms)，或者连续 2 次直连失败
         if (last_latencies and last_latencies[-1] >= 3000) or consecutive_failures >= 2:
             score.status = "DEMOTED"
@@ -1220,6 +1238,7 @@ def record_route_metrics(host: str, route: str, latency_ms: float, success: bool
 # ── main handler ──────────────────────────────────────────────────────
 
 async def handle(client_r, client_w):
+    _enable_nodelay(client_w)
     started_at = utc_now_iso()
     start_monotonic = time.monotonic()
     request_id = str(uuid.uuid4())[:8]

@@ -287,14 +287,44 @@
     </section>
 
     <section class="tab-panel" data-tab-panel="doctor">
-      <section class="table">
-        <h2>诊断</h2>
-        <p class="panel-intro" id="doctorMeta">正在运行本机自检...</p>
-        <div class="toolbar-row">
-          <button class="primary-action" id="runDoctor">重新自检</button>
+      <div class="doctor-dashboard-container">
+        <!-- 综合健康看板 Banner -->
+        <div class="doctor-health-banner">
+          <div class="health-gauge">
+            <div class="health-score-ring">
+              <svg viewBox="0 0 100 100">
+                <defs>
+                  <linearGradient id="scoreGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stop-color="#10b981" />
+                    <stop offset="100%" stop-color="#3b82f6" />
+                  </linearGradient>
+                </defs>
+                <circle cx="50" cy="50" r="40" class="ring-bg"></circle>
+                <circle cx="50" cy="50" r="40" class="ring-fill" id="doctorHealthRing"></circle>
+              </svg>
+              <div class="health-score-val" id="doctorHealthScore">--</div>
+            </div>
+            <div class="health-info">
+              <h3>智能代理体检引擎</h3>
+              <p class="panel-intro" id="doctorMeta">正在运行本机自检...</p>
+              <div class="health-desc" id="doctorHealthDesc">正在扫描系统所有组件状态，评估安全及通信链路健康水平。</div>
+            </div>
+          </div>
+          <div class="doctor-actions">
+            <button class="primary-action refresh-btn" id="runDoctor">
+              <svg class="icon-refresh" viewBox="0 0 24 24" width="16" height="16">
+                <path fill="currentColor" d="M17.65 6.35A7.958 7.958 0 0 0 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0 1 12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
+              </svg>
+              重新自检
+            </button>
+          </div>
         </div>
-        <div class="doctor-list" id="doctorChecks"></div>
-      </section>
+
+        <!-- 4大维度诊断网格 -->
+        <div class="doctor-grid" id="doctorGrid">
+          <div class="table-empty">正在加载诊断指标，请稍候...</div>
+        </div>
+      </div>
     </section>
 
     <div class="status" id="status">等待刷新</div>
