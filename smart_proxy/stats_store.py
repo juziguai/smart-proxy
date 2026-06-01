@@ -929,6 +929,49 @@ class StatsStore:
             "vacuum_error": vacuum_error,
         }
 
+    def get_traffic_ranking(self, since_iso=None):
+        """
+        获取从 since_iso 起的所有流量排行（按进程和 Host 聚类），高并发 SQLite 秒回。
+        """
+        sql_process = "SELECT client_process, COUNT(*) AS count FROM proxy_requests"
+        sql_host = "SELECT host, COUNT(*) AS count FROM proxy_requests"
+
+        params = []
+        if since_iso:
+            sql_process += " WHERE datetime(started_at) >= datetime(?)"
+            sql_host += " WHERE datetime(started_at) >= datetime(?)"
+            params.append(since_iso)
+
+        sql_process += " GROUP BY client_process ORDER BY count DESC"
+        sql_host += " GROUP BY host ORDER BY count DESC"
+
+        with self._connection() as conn:
+            process_rows = conn.execute(sql_process, params).fetchall()
+            host_rows = conn.execute(sql_host, params).fetchall()
+
+        software_ranking = []
+        for row in process_rows:
+            proc = row["client_process"] if isinstance(row, sqlite3.Row) else row[0]
+            cnt = row["count"] if isinstance(row, sqlite3.Row) else row[1]
+            software_ranking.append({
+                "process": proc or "unknown",
+                "count": cnt
+            })
+
+        host_ranking = []
+        for row in host_rows:
+            h = row["host"] if isinstance(row, sqlite3.Row) else row[0]
+            cnt = row["count"] if isinstance(row, sqlite3.Row) else row[1]
+            host_ranking.append({
+                "host": h or "unknown",
+                "count": cnt
+            })
+
+        return {
+            "software": software_ranking,
+            "host": host_ranking
+        }
+
     def _count_proxy_requests(self, conn):
         row = conn.execute("SELECT COUNT(*) AS count FROM proxy_requests").fetchone()
         return int(row["count"] if isinstance(row, sqlite3.Row) else row[0])

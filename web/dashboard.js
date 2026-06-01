@@ -1,4 +1,6 @@
     let currentRange = 'day';
+    let analyticsLoaded = false;
+    let analyticsRange = 'today';
     const selectedModels = new Set();
     let layoutEditing = false;
     let draggedWidget = null;
@@ -38,7 +40,77 @@
       if (target === 'providers' && !providerHealthLoaded) {
         refreshProviderQuotaHealth();
       }
+      if (target === 'analytics' && !analyticsLoaded) {
+        refreshTrafficAnalytics();
+      }
     };
+
+    const refreshTrafficAnalytics = async () => {
+      const softwareList = document.getElementById('analyticsSoftwareList');
+      const providerList = document.getElementById('analyticsProviderList');
+
+      try {
+        const res = await fetch(`/api/traffic-analytics?range=${analyticsRange}`, { cache: 'no-store' });
+        if (!res.ok) throw new Error('API returns ' + res.status);
+        const data = await res.json();
+
+        // 渲染软件活跃排行榜
+        if (!data.software_ranking || !data.software_ranking.length) {
+          softwareList.innerHTML = '<div class="table-empty">暂无软件流量数据</div>';
+        } else {
+          softwareList.innerHTML = data.software_ranking.map(item => `
+            <div class="analytics-row">
+              <div class="analytics-label">
+                <span class="process-name">${escapeHtml(item.process)}</span>
+                <span class="process-count">${item.count} 次 (${item.ratio})</span>
+              </div>
+              <div class="analytics-progress-bg">
+                <div class="analytics-progress-bar software-bar" style="width: ${item.ratio}"></div>
+              </div>
+            </div>
+          `).join('');
+        }
+
+        // 渲染厂商占比
+        if (!data.provider_ranking || !data.provider_ranking.length) {
+          providerList.innerHTML = '<div class="table-empty">暂无模型厂商流量数据</div>';
+        } else {
+          providerList.innerHTML = data.provider_ranking.map(item => {
+            let colorClass = 'other-bar';
+            const prov = item.provider;
+            if (prov.includes('OpenAI')) colorClass = 'openai-bar';
+            else if (prov.includes('Anthropic')) colorClass = 'anthropic-bar';
+            else if (prov.includes('Google')) colorClass = 'google-bar';
+            else if (prov.includes('DeepSeek')) colorClass = 'deepseek-bar';
+            else if (prov.includes('MiMo')) colorClass = 'mimo-bar';
+
+            return `
+              <div class="analytics-row">
+                <div class="analytics-label">
+                  <span class="provider-name">${escapeHtml(prov)}</span>
+                  <span class="provider-count">${item.count} 次 (${item.ratio})</span>
+                </div>
+                <div class="analytics-progress-bg">
+                  <div class="analytics-progress-bar ${colorClass}" style="width: ${item.ratio}"></div>
+                </div>
+              </div>
+            `;
+          }).join('');
+        }
+
+        // 更新 Meta 说明
+        const timeDesc = analyticsRange === 'today' ? '今日 00:00 至今' : '最新 3 天长期趋势';
+        text('analyticsSoftwareMeta', `${timeDesc}的活跃开发软件进程流量排行 (TOP 10)`);
+        text('analyticsProviderMeta', `${timeDesc}的大模型厂商调用占比分布（已过滤噪点并归入 Other）`);
+
+        analyticsLoaded = true;
+      } catch (error) {
+        console.error('Failed to load traffic analytics:', error);
+        softwareList.innerHTML = `<div class="table-empty" style="color: #dc2626">加载失败: ${escapeHtml(error.message)}</div>`;
+        providerList.innerHTML = `<div class="table-empty" style="color: #dc2626">加载失败: ${escapeHtml(error.message)}</div>`;
+      }
+    };
+
     const layoutWidgets = () => [...layoutRoot.querySelectorAll('[data-widget]')];
     const normalizeLayout = order => {
       const known = new Set(defaultLayout);
@@ -304,30 +376,114 @@
     };
     const hostRows = hosts => {
       if (!hosts.length) {
-        return '<div class="row"><span>暂无数据</span><strong>0</strong></div>';
+        return '<div class="telemetry-empty">暂无实时链路数据</div>';
       }
-      return hosts.map(host => {
-        const routeInfo = Object.entries(host.routes || {})
-          .map(([route, count]) => `${routeText(route)} ${fmt.format(count)}`)
-          .join(' / ');
-        const healthClass = host.health === 'critical'
-          ? 'critical'
-          : host.health === 'warning'
-            ? 'warning'
-            : '';
-        return `
-          <div class="host-row ${healthClass}">
-            <div class="host-main">
-              <strong>${escapeHtml(host.host || '-')}</strong>
-              <span>${escapeHtml(routeInfo || '无路由记录')} · 失败率 ${percent(host.failure_rate || 0)}</span>
+
+      // 按服务商 (Provider) 进行智能分组归类
+      const groups = new Map();
+      hosts.forEach(host => {
+        const meta = providerMeta(host.host);
+        if (!groups.has(meta.key)) {
+          groups.set(meta.key, {
+            name: meta.name,
+            color: meta.color,
+            logo: meta.logo,
+            hosts: []
+          });
+        }
+        groups.get(meta.key).hosts.push(host);
+      });
+
+      // 对分组按照该组的总请求量进行排序，大请求量的服务商排在前面
+      const sortedGroups = [...groups.values()].sort((a, b) => {
+        const aSum = a.hosts.reduce((sum, h) => sum + (h.total_requests || 0), 0);
+        const bSum = b.hosts.reduce((sum, h) => sum + (h.total_requests || 0), 0);
+        return bSum - aSum;
+      });
+
+      return sortedGroups.map(group => {
+        const groupTotalRequests = group.hosts.reduce((sum, h) => sum + (h.total_requests || 0), 0);
+
+        // 渲染表头
+        const tableHeaderHtml = `
+          <div class="flat-table-row header">
+            <div class="flat-col-host">ENDPOINT / ROUTE</div>
+            <div class="flat-col-load">REQUESTS</div>
+            <div class="flat-col-success">SUCCESS RATE</div>
+            <div class="flat-col-latency">T3 CONNECT</div>
+            <div class="flat-col-duration">T5 TOTAL</div>
+          </div>
+        `;
+
+        const rowsHtml = group.hosts.map(host => {
+          const routeInfo = Object.entries(host.routes || {})
+            .map(([route, count]) => `${routeText(route)} ${fmt.format(count)}`)
+            .join(' / ');
+          const isWarning = host.health === 'warning';
+          const isCritical = host.health === 'critical';
+          const healthClass = isCritical ? 'critical' : (isWarning ? 'warning' : 'ok');
+
+          // 成功率的纯数字警示
+          const failureRate = host.failure_rate || 0;
+          const successRate = 1 - failureRate;
+          const successText = `${(successRate * 100).toFixed(2)}%`;
+          const successClass = successRate < 0.95 ? 'bad' : 'good';
+
+          // 建连耗时与持续耗时的警示
+          const latency = host.average_connect_latency_ms || host.average_latency_ms || 0;
+          const duration = host.average_duration_ms || 0;
+
+          // 仅当异常时点亮相应的数字颜色
+          const latencyClass = latency > 800 ? 'bad' : 'normal';
+          const durationClass = duration > 2000 ? 'bad' : 'normal';
+
+          return `
+            <div class="flat-table-row data-row ${healthClass}">
+              <!-- 1. 域名与路由 -->
+              <div class="flat-col-host">
+                <span class="flat-status-dot ${healthClass}"></span>
+                <strong class="flat-host-name" title="${escapeHtml(host.host || '-')}">${escapeHtml(host.host || '-')}</strong>
+                <span class="flat-route-info" title="${escapeHtml(routeInfo)}">${escapeHtml(routeInfo || '无路由记录')}</span>
+              </div>
+
+              <!-- 2. 请求负载 -->
+              <div class="flat-col-load">
+                <span class="flat-val-num">${fmt.format(host.total_requests)}</span>
+              </div>
+
+              <!-- 3. 健康成功率 -->
+              <div class="flat-col-success ${successClass}">
+                <span class="flat-val-num">${successText}</span>
+              </div>
+
+              <!-- 4. P50建连时延 -->
+              <div class="flat-col-latency ${latencyClass}">
+                <span class="flat-val-num">${fmt.format(latency)}<span class="ms-unit">ms</span></span>
+              </div>
+
+              <!-- 5. T5总持续时延 -->
+              <div class="flat-col-duration ${durationClass}">
+                <span class="flat-val-num">${fmt.format(duration)}<span class="ms-unit">ms</span></span>
+              </div>
             </div>
-            <div class="host-meta">
-              <span class="pill">${fmt.format(host.total_requests)} 次</span>
-              <span class="pill good">成功 ${fmt.format(host.successful_requests)}</span>
-              <span class="pill bad">失败 ${fmt.format(host.failed_requests)}</span>
-              <span class="pill">慢建连 ${fmt.format(host.slow_requests || 0)}</span>
-              <span class="pill">建连 ${fmt.format(host.average_connect_latency_ms || host.average_latency_ms || 0)}ms</span>
-              <span class="pill">持续 ${fmt.format(host.average_duration_ms || 0)}ms</span>
+          `;
+        }).join('');
+
+        return `
+          <div class="flat-provider-section">
+            <!-- 极为优雅清秀的组头部 -->
+            <div class="flat-provider-header">
+              <span class="flat-provider-logo" style="color: ${escapeHtml(group.color)}">${escapeHtml(group.logo)}</span>
+              <div class="flat-provider-details">
+                <h3 class="flat-provider-title">${escapeHtml(group.name.toUpperCase())}</h3>
+                <span class="flat-provider-summary">流量负载: ${fmt.format(groupTotalRequests)} 次请求 · ${group.hosts.length} 个活跃节点</span>
+              </div>
+            </div>
+
+            <!-- 精准对齐的瓷感扁平网格数据表 -->
+            <div class="flat-provider-table">
+              ${tableHeaderHtml}
+              ${rowsHtml}
             </div>
           </div>
         `;
@@ -587,53 +743,55 @@
       `;
     };
     const runtimeRows = status => {
-      const proxyText = status.proxy_enabled === true
-        ? '已启用'
-        : status.proxy_enabled === false
-          ? '未启用'
-          : '未知';
-      const upstream = status.upstream_proxy || '直连 / 未检测到系统代理';
+      const proxyText = status.proxy_enabled === true ? 'ACTIVE' : 'DISABLED';
+      const proxyClass = status.proxy_enabled === true ? 'good' : 'warn';
+      const upstream = status.upstream_proxy || 'DIRECT CONNECTION';
       const whitelistLoadedAt = status.whitelist_loaded_at
         ? new Date(status.whitelist_loaded_at).toLocaleString()
-        : '尚未加载';
-      const items = [
-        ['系统代理', proxyText],
-        ['上游地址', upstream],
-        ['白名单条目', fmt.format(status.whitelist_count || 0)],
-        ['白名单文件', status.whitelist_path || '-'],
-        ['加载时间', whitelistLoadedAt],
+        : 'NOT LOADED';
+
+      const slots = [
+        { label: 'PROXY STATE', val: proxyText, cls: proxyClass },
+        { label: 'UPSTREAM GATEWAY', val: upstream, cls: 'gray' },
+        { label: 'WHITELIST RULES', val: `${fmt.format(status.whitelist_count || 0)} ACTIVE`, cls: 'gray' },
+        { label: 'METRIC SYNCHRONIZED', val: whitelistLoadedAt, cls: 'gray' }
       ];
-      let baseHtml = items.map(([label, value]) => `
-        <div class="runtime-item">
-          <span>${escapeHtml(label)}</span>
-          <strong>${escapeHtml(value)}</strong>
+
+      let slotsHtml = slots.map(slot => `
+        <div class="flat-sled-cell ${slot.cls}">
+          <span class="sled-label">${escapeHtml(slot.label)}</span>
+          <strong class="sled-val">${escapeHtml(slot.val)}</strong>
         </div>
       `).join('');
 
-      // 追加：渲染实时智能路由分流状态
+      // 追加：智能路由分流状态面板
       let adaptiveSection = '';
       if (status.active_adaptive_routes && Object.keys(status.active_adaptive_routes).length > 0) {
         const routeItems = Object.entries(status.active_adaptive_routes).map(([host, route]) => {
           const isDemoted = route.status === 'DEMOTED';
           const badgeClass = isDemoted ? 'warn' : 'good';
-          const label = isDemoted ? '⚠️ 自动走代理' : '⚡ 智能直连';
-          const desc = isDemoted ? '直连崩溃自愈中' : '代理拥堵升级中';
+          const label = isDemoted ? 'DEMOTED' : 'DIRECT';
+          const desc = isDemoted ? 'recovery stream active' : 'routing optimization active';
           return `
-            <div class="runtime-item adaptive-route-item ${badgeClass}" style="border-left: 3px solid ${isDemoted ? '#f59e0b' : '#10b981'}; padding-left: 8px; margin-top: 6px; background: ${isDemoted ? '#fffbeb' : '#ecfdf5'};">
-              <span style="font-weight: 600; color: #1f2937; max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(host)}">${escapeHtml(host)}</span>
-              <strong>
-                <span class="status-badge ${badgeClass}" style="font-size: 10px; padding: 2px 6px;">${label}</span>
-                <span style="font-size:10px; color:#6b7280; margin-left:4px; font-weight:normal;">${desc} (${route.expires_in}s)</span>
-              </strong>
+            <div class="flat-adaptive-slot ${badgeClass}">
+              <span class="adaptive-dot"></span>
+              <strong class="adaptive-host-text" title="${escapeHtml(host)}">${escapeHtml(host)}</strong>
+              <span class="adaptive-status-badge">${label}</span>
+              <span class="adaptive-desc-text">${desc}</span>
+              <span class="adaptive-expires">${route.expires_in}s</span>
             </div>
           `;
         }).join('');
         adaptiveSection = `
-          <div class="runtime-section-title" style="margin-top:20px; margin-bottom:8px; font-size:12px; color:#64748b; font-weight:bold; border-bottom:1px dashed #e2e8f0; padding-bottom:4px;">实时智能分流状态</div>
-          ${routeItems}
+          <div class="flat-adaptive-board">
+            <div class="adaptive-board-title">ACTIVE ADAPTIVE ROUTING STREAM</div>
+            <div class="adaptive-mini-list">
+              ${routeItems}
+            </div>
+          </div>
         `;
       }
-      return baseHtml + adaptiveSection;
+      return `<div class="flat-slots-container">${slotsHtml}</div>` + adaptiveSection;
     };
     const updateShellStatus = status => {
       const proxyChip = document.getElementById('proxyChip');
@@ -1615,20 +1773,25 @@
       const generatedAt = report?.generated_at
         ? new Date(report.generated_at).toLocaleString()
         : '刚刚';
-      text('providerQuotaMeta', `服务商额度 / 限流状态 · ${generatedAt}`);
+      text('providerQuotaMeta', `服务商额度与限流检测 · ${generatedAt}`);
       if (!check) {
-        container.innerHTML = '<div class="table-empty">暂无服务商健康数据</div>';
+        container.innerHTML = '<div class="telemetry-empty">暂无检测数据</div>';
         return;
       }
       const ok = check.status === 'ok';
       container.innerHTML = `
-        <div class="doctor-item">
-          <div>
-            <strong>${escapeHtml(check.label || 'Provider quota / health')}</strong>
-            <span>${escapeHtml(check.detail || '-')}</span>
-            ${ok ? '' : `<span>${escapeHtml(check.fix || '请检查模型服务商额度或限流状态')}</span>`}
+        <div class="flat-telem-row ${ok ? 'ok' : 'warn'}">
+          <div class="flat-telem-status">
+            <span class="flat-telem-dot"></span>
+            <span class="flat-telem-badge-text">${ok ? 'SYSTEM ONLINE' : 'ATTENTION REQUIRED'}</span>
           </div>
-          <span class="status-badge doctor-status ${ok ? 'ok' : 'warning'}">${ok ? '正常' : '关注'}</span>
+          <strong class="flat-telem-title">${escapeHtml(check.label || '服务商状态检测')}</strong>
+          <p class="flat-telem-desc">${escapeHtml(check.detail || '-')}</p>
+          ${ok ? '' : `
+            <div class="flat-telem-fix">
+              <span class="fix-label">建议：</span>${escapeHtml(check.fix || '请检查模型服务商额度或限流状态')}
+            </div>
+          `}
         </div>
       `;
     };
@@ -2022,5 +2185,23 @@
       'click',
       () => refreshProviderQuotaHealth({ force: true }),
     );
+
+    // 绑定流量大屏时间切换按钮
+    ['analyticsSoftwareRange', 'analyticsProviderRange'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) {
+        el.querySelectorAll('button[data-range]').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const range = btn.dataset.range;
+            analyticsRange = range;
+            // 同步所有的流量范围切换按钮状态
+            document.querySelectorAll('#analyticsSoftwareRange button, #analyticsProviderRange button').forEach(b => {
+              b.classList.toggle('active', b.dataset.range === range);
+            });
+            refreshTrafficAnalytics();
+          });
+        });
+      }
+    });
 
     scheduleRefresh();

@@ -2,9 +2,20 @@
 
 Windows 本地智能代理 sidecar。
 
+当前版本：`v0.4.0`
+
 它固定监听 `127.0.0.1:8889`，由 Claude Code、Antigravity、Cockpit Tools 等客户端连接；请求进来后，smart-proxy 会按当前 Windows 系统代理状态、白名单和本地规则决定直连还是转发到上游代理。
 
 同时提供一个本地 Dashboard：`http://127.0.0.1:8890`，用于查看连接、延迟、错误、用量和运行状态。
+
+## 更新摘要
+
+`v0.4.0` 将 smart-proxy 从普通后台脚本升级为 Windows Service 兜底的本地网关：
+
+- 新增 `SmartProxyWatchdog` Windows Service，开机自动守护 watchdog。
+- watchdog 增加 Antigravity `127.0.0.1:443` TLS relay 自愈，避免 hosts 指向本机后 relay 掉线造成连接拒绝。
+- Dashboard 新增流量分析接口和页面，可按软件进程、模型厂商查看请求占比。
+- Claude 启动脚本模板新增服务管理入口：`-sps` 查看状态，`-spr` 重启服务。
 
 ## 特性
 
@@ -12,7 +23,7 @@ Windows 本地智能代理 sidecar。
 - 支持 `whitelist.txt`，命中域名直接连接，减少不必要代理绕路。
 - 不解密 HTTPS，不读取 API key，只做 CONNECT/HTTP 透明转发。
 - 记录本地连接统计、Host 状态、客户端来源和 Claude transcript 用量。
-- 内置本地 Dashboard 和 Doctor 诊断页。
+- 内置本地 Dashboard、流量分析和 Doctor 诊断页。
 - 纯 Python 标准库实现，无第三方运行依赖。
 
 ## 快速开始
@@ -28,6 +39,19 @@ python smart-proxy.py
 ```text
 代理入口:     http://127.0.0.1:8889
 Dashboard:   http://127.0.0.1:8890
+```
+
+安装 Windows Service 守护：
+
+```powershell
+.\install-smart-proxy-service.ps1
+```
+
+服务状态与重启：
+
+```powershell
+.\install-smart-proxy-service.ps1 -Status
+.\install-smart-proxy-service.ps1 -Restart
 ```
 
 如果配合 Claude Code 启动脚本使用，把 [claude-with-proxy.ps1](claude-with-proxy.ps1) 复制到自己的用户目录，并按脚本顶部提示填写：
@@ -96,6 +120,7 @@ http://127.0.0.1:8890
 - 查看代理是否运行、上游代理是否可用。
 - 查看请求数、成功率、延迟、错误和最近请求。
 - 按 Host、客户端、模型查看统计。
+- 按软件进程和模型厂商查看流量占比。
 - 查看 Claude transcript 中的 token 用量和预估费用。
 - 编辑本地白名单。
 - 运行 Doctor 诊断。
@@ -110,8 +135,10 @@ smart-proxy/
 ├── .gitignore                         # Git 忽略规则
 │
 ├── smart-proxy.py                     # 稳定启动入口
+├── smart-proxy-service.py             # Windows Service 入口
 ├── claude-with-proxy.ps1              # Claude Code 启动脚本模板
 ├── setup.ps1                          # 新机器初始化辅助脚本
+├── install-smart-proxy-service.ps1    # 安装和管理 Windows Service
 ├── install-smart-proxy-watchdog.ps1   # 安装 watchdog 守护脚本
 ├── smart-proxy-watchdog.ps1           # 本地常驻守护脚本
 ├── start-proxy.vbs                    # Windows 无窗口启动入口
@@ -119,6 +146,7 @@ smart-proxy/
 ├── smart_proxy/                       # 核心 Python 包
 │   ├── proxy.py                       # 代理主流程和服务入口
 │   ├── config.py                      # 配置读取与默认值
+│   ├── windows_service.py             # Windows Service 宿主实现
 │   ├── windows_network.py             # Windows 代理读取和进程归因
 │   ├── whitelist.py                   # 白名单加载、匹配、保存
 │   ├── stats_store.py                 # SQLite 统计数据层

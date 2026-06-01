@@ -10,6 +10,21 @@ $LOCALMEMORY_MCP_CMD = "<LocalMemory MCP cmd路径>"
 $CLAUDE_SLIM_MCP_CONFIG = Join-Path $env:USERPROFILE ".claude\mcp-slim.json"
 # =====================
 
+$earlySmartProxyServiceStatusArgs = @("-sps", "--sps", "-proxy-status", "--proxy-status", "-smart-proxy-status", "--smart-proxy-status")
+$earlySmartProxyServiceRestartArgs = @("-spr", "--spr", "-proxy-restart", "--proxy-restart", "-smart-proxy-restart", "--smart-proxy-restart")
+if ($args.Count -eq 1 -and ($earlySmartProxyServiceStatusArgs -contains $args[0] -or $earlySmartProxyServiceRestartArgs -contains $args[0])) {
+    $serviceScript = Join-Path $SMART_PROXY_DIR "install-smart-proxy-service.ps1"
+    if (-not (Test-Path -LiteralPath $serviceScript)) {
+        Write-Host "[service] 未找到服务管理脚本: $serviceScript" -ForegroundColor Red
+        return
+    }
+
+    $serviceAction = if ($earlySmartProxyServiceRestartArgs -contains $args[0]) { "Restart" } else { "Status" }
+    Write-Host "[service] 执行: $serviceAction" -ForegroundColor Cyan
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $serviceScript "-$serviceAction"
+    return
+}
+
 Set-Location $CLAUDE_PROJECT_DIR
 
 function Initialize-SlimMcpConfig {
@@ -356,6 +371,55 @@ function Set-ModelProvider {
     Write-Host ""
 }
 
+function Invoke-SmartProxyServiceTool {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet("Status", "Restart", "Install")]
+        [string]$Action
+    )
+
+    $serviceScript = Join-Path $SMART_PROXY_DIR "install-smart-proxy-service.ps1"
+    if (-not (Test-Path -LiteralPath $serviceScript)) {
+        Write-Host "[service] 未找到服务管理脚本: $serviceScript" -ForegroundColor Red
+        return $false
+    }
+
+    Write-Host "[service] 执行: $Action" -ForegroundColor Cyan
+    $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $serviceScript "-$Action" 2>&1
+    $exitCode = $LASTEXITCODE
+    foreach ($line in $output) {
+        Write-Host $line
+    }
+    if ($exitCode -ne 0) {
+        Write-Host "[service] 命令失败: $Action" -ForegroundColor Red
+        return $false
+    }
+    return $true
+}
+
+function Show-SmartProxyServiceMenu {
+    Write-Host ""
+    Write-Host "=== Smart Proxy 服务管理 ===" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "  [1] 查看服务状态"
+    Write-Host "  [2] 重启服务"
+    Write-Host "  [3] 安装/修复并启动服务"
+    Write-Host ""
+
+    $serviceChoice = Read-Host "输入序号 (1/2/3，默认 1)"
+    switch ($serviceChoice) {
+        "2" {
+            Invoke-SmartProxyServiceTool -Action "Restart" | Out-Null
+        }
+        "3" {
+            Invoke-SmartProxyServiceTool -Action "Install" | Out-Null
+        }
+        default {
+            Invoke-SmartProxyServiceTool -Action "Status" | Out-Null
+        }
+    }
+}
+
 $providers = @{
     "1" = @{
         Label = "MiniMax-M2.7-highspeed"
@@ -421,9 +485,14 @@ Write-Host "  [2] deepseek-v4-pro[1m]"
 Write-Host "  [3] deepseek-v4-flash[1m]"
 Write-Host "  [4] MiMo-V2.5-Pro"
 Write-Host "  [5] MiMo-V2.5"
+Write-Host "  [6] Smart Proxy 服务管理"
 Write-Host ""
 
-$modelChoice = Read-Host "输入序号 (1/2/3/4/5，默认 1)"
+$modelChoice = Read-Host "输入序号 (1/2/3/4/5/6，默认 1)"
+if ($modelChoice -eq "6") {
+    Show-SmartProxyServiceMenu
+    return
+}
 if (-not $providers.ContainsKey($modelChoice)) {
     $modelChoice = "1"
 }

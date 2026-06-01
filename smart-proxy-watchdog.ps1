@@ -84,9 +84,56 @@ function Get-SmartProxyProcess {
     }
 }
 
+function Get-TlsRelayProcess {
+    $resolvedRelayScript = ""
+    $relayScriptPath = Join-Path $PSScriptRoot "antigravity-tls-relay.py"
+    if (Test-Path -LiteralPath $relayScriptPath) {
+        $resolvedRelayScript = (Resolve-Path -LiteralPath $relayScriptPath).Path
+    }
+
+    Get-CimInstance Win32_Process | Where-Object {
+        ($_.Name -eq 'python.exe' -or $_.Name -eq 'pythonw.exe') -and
+        (
+            ($resolvedRelayScript -and $_.CommandLine -like "*$resolvedRelayScript*") -or
+            $_.CommandLine -like "*antigravity-tls-relay.py*"
+        )
+    }
+}
+
+function Ensure-TlsRelayRunning {
+    $processes = @(Get-TlsRelayProcess)
+    $relayReady = Test-TcpPort -HostName "127.0.0.1" -Port 443 -TimeoutMilliseconds 1000
+
+    if (-not $processes -or -not $relayReady) {
+        Write-WatchdogLog "[Relay-Heal] TLS Relay (443) unhealthy or not running. Re-launching..."
+        foreach ($process in $processes) {
+            Write-WatchdogLog "[Relay-Heal] stopping zombie tls-relay PID $($process.ProcessId)"
+            Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+        Start-Sleep -Milliseconds 200
+
+        $python = Resolve-PythonExe
+        $relayScript = Join-Path $PSScriptRoot "antigravity-tls-relay.py"
+        if (Test-Path -LiteralPath $relayScript) {
+            $resolvedPath = (Resolve-Path -LiteralPath $relayScript).Path
+            $relayOutLog = Join-Path $LogDir "antigravity-tls-relay.out.log"
+            $relayErrLog = Join-Path $LogDir "antigravity-tls-relay.err.log"
+
+            Write-WatchdogLog "[Relay-Heal] starting tls-relay: $python $resolvedPath"
+            Start-Process `
+                -WindowStyle Hidden `
+                -FilePath $python `
+                -WorkingDirectory $PSScriptRoot `
+                -ArgumentList @($resolvedPath) `
+                -RedirectStandardOutput $relayOutLog `
+                -RedirectStandardError $relayErrLog
+        }
+    }
+}
+
 function Get-RuntimeStatus {
     try {
-        return Invoke-RestMethod -Uri $DashboardHealthUrl -TimeoutSec 2
+        return Invoke-RestMethod -Uri $DashboardHealthUrl -TimeoutSec 5
     }
     catch {
         return $null
@@ -191,24 +238,37 @@ if ($Status) {
 }
 
 $lastRestartAt = [datetime]::MinValue
+$consecutiveFailures = 0
+$maxConsecutiveFailures = 3
+
 while ($true) {
     try {
+        Ensure-TlsRelayRunning
         $health = Test-SmartProxyHealth
         if (-not $health.ok) {
-            $elapsed = (Get-Date) - $lastRestartAt
-            if ($elapsed.TotalSeconds -ge $RestartCooldownSeconds) {
-                Write-WatchdogLog "unhealthy proxy=$($health.proxy_ready) dashboard=$($health.dashboard_ready) runtime=$($health.runtime_ready); restarting"
-                Restart-SmartProxy
-                $lastRestartAt = Get-Date
-                $after = Wait-SmartProxyHealthy -TimeoutSeconds 15
-                Write-WatchdogLog "post-restart ok=$($after.ok) runtime_upstream=$($after.upstream_proxy) upstream_ok=$($after.upstream_ok)"
-            }
-            else {
-                Write-WatchdogLog "unhealthy but restart cooldown active"
+            $consecutiveFailures++
+            Write-WatchdogLog "detecting unhealthy status ($consecutiveFailures/$maxConsecutiveFailures): proxy=$($health.proxy_ready) dashboard=$($health.dashboard_ready) runtime=$($health.runtime_ready)"
+
+            if ($consecutiveFailures -ge $maxConsecutiveFailures) {
+                $elapsed = (Get-Date) - $lastRestartAt
+                if ($elapsed.TotalSeconds -ge $RestartCooldownSeconds) {
+                    Write-WatchdogLog "unhealthy consecutive limit reached ($consecutiveFailures); restarting smart-proxy"
+                    Restart-SmartProxy
+                    $lastRestartAt = Get-Date
+                    $consecutiveFailures = 0
+                    $after = Wait-SmartProxyHealthy -TimeoutSeconds 15
+                    Write-WatchdogLog "post-restart ok=$($after.ok) runtime_upstream=$($after.upstream_proxy) upstream_ok=$($after.upstream_ok)"
+                }
+                else {
+                    Write-WatchdogLog "unhealthy but restart cooldown active"
+                }
             }
         }
-        elseif (-not $health.upstream_ok) {
-            Write-WatchdogLog "smart-proxy healthy but runtime upstream warning: $($health.upstream_proxy) $($health.upstream_note)"
+        else {
+            $consecutiveFailures = 0
+            if (-not $health.upstream_ok) {
+                Write-WatchdogLog "smart-proxy healthy but runtime upstream warning: $($health.upstream_proxy) $($health.upstream_note)"
+            }
         }
     }
     catch {

@@ -141,6 +141,83 @@ def handle_stats_request(
         except ValueError as exc:
             return build_stats_response(400, {"error": str(exc)})
 
+    if method == "GET" and parsed_url.path == "/api/traffic-analytics":
+        params = parse_qs(parsed_url.query)
+        range_name = (params.get("range") or ["today"])[0]
+
+        from datetime import datetime, timedelta, time as datetime_time
+        current = datetime.now().astimezone()
+        if range_name == "3days":
+            start_date = current.date() - timedelta(days=2)
+            start = datetime.combine(start_date, datetime_time.min, tzinfo=current.tzinfo)
+        else:
+            # 默认或 today：提取今日 00:00 至今
+            start = datetime.combine(current.date(), datetime_time.min, tzinfo=current.tzinfo)
+
+        since_iso = start.isoformat()
+        raw_data = stats_store.get_traffic_ranking(since_iso)
+
+        # 1. 软件分类占比统计
+        software_raw = raw_data.get("software", [])
+        total_software_requests = sum(s["count"] for s in software_raw)
+        software_ranking = []
+        for s in software_raw:
+            pct = f"{s['count'] / total_software_requests * 100:.1f}%" if total_software_requests > 0 else "0.0%"
+            software_ranking.append({
+                "process": s["process"],
+                "count": s["count"],
+                "ratio": pct
+            })
+
+        # 2. 大模型厂商分类聚合（排除非大模型噪点，归入 Other）
+        host_raw = raw_data.get("host", [])
+        provider_counts = {}
+
+        def _get_provider(h):
+            hl = h.lower()
+            if not hl or hl == "unknown":
+                return "Other (其他网络流量)"
+            if "xiaomimimo" in hl:
+                return "MiMo (小米中转)"
+            if "deepseek" in hl:
+                return "DeepSeek (深度求索)"
+            if "minimax" in hl:
+                return "MiniMax (海螺AI)"
+            if "anthropic" in hl:
+                return "Anthropic (Claude)"
+            if "openai" in hl or "chatgpt" in hl:
+                return "OpenAI (ChatGPT/Codex)"
+            if "googleapis" in hl or "google" in hl:
+                if hl == "dns.google":
+                    return "Other (其他网络流量)"
+                return "Google (Gemini)"
+            # 其他开发或基础通信，归入 Other 保持大屏干净
+            return "Other (其他网络流量)"
+
+        for h in host_raw:
+            provider = _get_provider(h["host"])
+            provider_counts[provider] = provider_counts.get(provider, 0) + h["count"]
+
+        total_provider_requests = sum(provider_counts.values())
+        provider_ranking = []
+        for prov, cnt in sorted(provider_counts.items(), key=lambda x: x[1], reverse=True):
+            pct = f"{cnt / total_provider_requests * 100:.1f}%" if total_provider_requests > 0 else "0.0%"
+            provider_ranking.append({
+                "provider": prov,
+                "count": cnt,
+                "ratio": pct
+            })
+
+        return build_stats_response(
+            200,
+            {
+                "software_ranking": software_ranking[:10],
+                "provider_ranking": provider_ranking,
+                "range": range_name,
+                "since": since_iso
+            }
+        )
+
     if method == "GET" and parsed_url.path == "/api/doctor":
         if doctor_provider is None:
             return build_stats_response(200, {"checks": []})

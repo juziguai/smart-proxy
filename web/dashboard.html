@@ -4,6 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Smart Proxy Stats</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@100..900&family=Geist:wght@100..900&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/assets/dashboard.css">
 </head>
 <body>
@@ -33,6 +36,7 @@
 
     <nav class="tab-nav" aria-label="dashboard sections">
       <button class="tab-button active" data-tab-target="overview">总览</button>
+      <button class="tab-button" data-tab-target="analytics">流量分析</button>
       <button class="tab-button" data-tab-target="providers">服务商</button>
       <button class="tab-button" data-tab-target="requests">请求</button>
       <button class="tab-button" data-tab-target="usage">用量与成本</button>
@@ -187,27 +191,75 @@
       </div>
     </section>
 
-    <section class="tab-panel" data-tab-panel="providers">
-      <section class="details diagnostics">
+    <section class="tab-panel" data-tab-panel="analytics">
+      <section class="details">
         <div class="table">
           <div class="table-head">
             <div>
-              <h2>模型服务商状态</h2>
-              <p class="panel-intro" id="providerQuotaMeta">等待服务商健康数据...</p>
+              <h2>全天软件流量排行 (TOP 10)</h2>
+              <p class="panel-intro" id="analyticsSoftwareMeta">今日累计活跃开发软件进程流量排行</p>
             </div>
-            <button class="layout-action" id="refreshProviderHealth">重新检查</button>
+            <div class="segment" role="group" id="analyticsSoftwareRange" style="display:flex; gap:4px">
+              <button data-range="today" class="active">今日流量</button>
+              <button data-range="3days">最新 3 天趋势</button>
+            </div>
           </div>
-          <div id="providerQuotaHealth"></div>
+          <div class="entry-list" id="analyticsSoftwareList" style="padding:12px; display:flex; flex-direction:column; gap:16px">
+            <div class="table-empty">正在加载软件流量排行...</div>
+          </div>
         </div>
+
         <div class="table">
-          <h2>代理状态</h2>
-          <div class="runtime-list" id="runtimeStatus"></div>
-        </div>
-        <div class="table">
-          <h2>Host 统计</h2>
-          <div id="hosts"></div>
+          <div class="table-head">
+            <div>
+              <h2>全天模型厂商流量排行</h2>
+              <p class="panel-intro" id="analyticsProviderMeta">今日累计大模型厂商调用占比分布（已过滤噪点）</p>
+            </div>
+            <div class="segment" role="group" id="analyticsProviderRange" style="display:flex; gap:4px">
+              <button data-range="today" class="active">今日流量</button>
+              <button data-range="3days">最新 3 天趋势</button>
+            </div>
+          </div>
+          <div class="entry-list" id="analyticsProviderList" style="padding:12px; display:flex; flex-direction:column; gap:16px">
+            <div class="table-empty">正在加载模型厂商流量排行...</div>
+          </div>
         </div>
       </section>
+    </section>
+
+    <section class="tab-panel" data-tab-panel="providers">
+      <div class="providers-layout-root">
+        <div class="providers-split-deck">
+          <!-- 左侧 32%：自愈遥测监控控制塔 -->
+          <aside class="providers-telemetry-tower">
+            <!-- 额度限流自愈 -->
+            <div class="tower-card" id="providerQuotaTelemetry">
+              <div class="tower-card-header">
+                <span class="tower-card-title">PROVIDER STATUS</span>
+                <button class="tower-refresh-btn" id="refreshProviderHealth" aria-label="重新检查">
+                  <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+                </button>
+              </div>
+              <p class="tower-card-meta" id="providerQuotaMeta">DETECTION STREAM ACTIVE</p>
+              <div id="providerQuotaHealth"></div>
+            </div>
+
+            <!-- 代理核心状态 -->
+            <div class="tower-card" id="systemCoreTelemetry">
+              <div class="tower-card-header">
+                <span class="tower-card-title">CORE NETWORK</span>
+              </div>
+              <p class="tower-card-meta">Realtime gateway & proxy tunnel metrics</p>
+              <div class="slots-matrix" id="runtimeStatus"></div>
+            </div>
+          </aside>
+
+          <!-- 右侧 68%： hosts 链路极简扁平数据网格 -->
+          <main class="providers-grid-terminal" id="hosts">
+            <!-- 数据由 JS 动态渲染 -->
+          </main>
+        </div>
+      </div>
     </section>
 
     <section class="tab-panel" data-tab-panel="requests">
@@ -275,7 +327,7 @@
           <!-- 屏蔽说明 -->
           <div class="table" style="flex: 1; min-height: 200px; display: flex; flex-direction: column;">
             <h2>访问控制与屏蔽说明</h2>
-            <div style="padding: 12px; background: var(--wash, #f8f9fa); border-radius: 8px; font-size: 13px; color: var(--muted, #64748b); line-height: 1.7; flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 6px;">
+            <div class="access-notice-box">
               <div>📡 <strong>屏蔽优先级</strong>：屏蔽名单优先级高于白名单，支持 <code>*</code> 通配符。</div>
               <div>⚡ <strong>响应时间</strong>：&lt;1ms（极速拒绝，直接释放 TCP 句柄，省电省带宽）。</div>
               <div>📊 <strong>统计指标</strong>：单独隔离记账，不影响常规成功率统计。</div>
