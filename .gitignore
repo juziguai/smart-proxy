@@ -6,6 +6,7 @@ __pycache__/
 logs/
 data/
 diagnostics/
+.understand-anything/
 smart-proxy-stats.db*
 *.db
 *.db-*

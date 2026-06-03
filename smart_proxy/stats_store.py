@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from contextlib import contextmanager
-from datetime import datetime, time as datetime_time, timedelta
+from datetime import datetime, time as datetime_time, timedelta, timezone
 from pathlib import Path
 import sqlite3
 
@@ -135,8 +135,8 @@ class StatsStore:
         where = ""
         params = []
         if since:
-            where = "WHERE datetime(started_at) >= datetime(?)"
-            params.append(since)
+            where = "WHERE started_at >= ?"
+            params.append(self._indexed_time_value(since))
         params.append(limit)
 
         with self._connection() as conn:
@@ -287,7 +287,7 @@ class StatsStore:
                     "started_at",
                     since,
                 ),
-                [since] if since else [],
+                [self._indexed_time_value(since)] if since else [],
             ).fetchall()
             usage_sql, usage_params = self._usage_trends_query(since, models)
             usage_rows = conn.execute(usage_sql, usage_params).fetchall()
@@ -872,11 +872,11 @@ class StatsStore:
         clauses = []
         params = []
         if since:
-            clauses.append(f"datetime({column}) >= datetime(?)")
-            params.append(since)
+            clauses.append(f"{column} >= ?")
+            params.append(self._indexed_time_value(since))
         if until:
-            clauses.append(f"datetime({column}) < datetime(?)")
-            params.append(until)
+            clauses.append(f"{column} < ?")
+            params.append(self._indexed_time_value(until))
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         return where, params
 
@@ -889,7 +889,7 @@ class StatsStore:
         keep_days = max(1, int(keep_days))
         current = parse_datetime(now) if now else datetime.now().astimezone()
         cutoff = current - timedelta(days=keep_days)
-        cutoff_iso = cutoff.isoformat()
+        cutoff_iso = self._indexed_time_value(cutoff.isoformat())
         size_before = self._db_path.stat().st_size if self._db_path.exists() else 0
 
         with self._connection() as conn:
@@ -898,7 +898,7 @@ class StatsStore:
                 cursor = conn.execute(
                     """
                     DELETE FROM proxy_requests
-                    WHERE datetime(started_at) < datetime(?)
+                    WHERE started_at < ?
                     """,
                     (cutoff_iso,),
                 )
@@ -938,9 +938,9 @@ class StatsStore:
 
         params = []
         if since_iso:
-            sql_process += " WHERE datetime(started_at) >= datetime(?)"
-            sql_host += " WHERE datetime(started_at) >= datetime(?)"
-            params.append(since_iso)
+            sql_process += " WHERE started_at >= ?"
+            sql_host += " WHERE started_at >= ?"
+            params.append(self._indexed_time_value(since_iso))
 
         sql_process += " GROUP BY client_process ORDER BY count DESC"
         sql_host += " GROUP BY host ORDER BY count DESC"
@@ -1042,6 +1042,18 @@ class StatsStore:
                     )
                     """
                 )
+                conn.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_proxy_requests_started_at
+                    ON proxy_requests(started_at)
+                    """
+                )
+                conn.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_proxy_requests_host_started_at
+                    ON proxy_requests(host, started_at)
+                    """
+                )
 
     def _migrate_proxy_request_columns(self, conn):
         columns = {
@@ -1141,8 +1153,11 @@ class StatsStore:
 
     def _range_query(self, select_sql, time_column, since):
         if since:
-            return f"{select_sql} WHERE datetime({time_column}) >= datetime(?)"
+            return f"{select_sql} WHERE {time_column} >= ?"
         return select_sql
+
+    def _indexed_time_value(self, value):
+        return parse_datetime(value).astimezone(timezone.utc).isoformat()
 
     def _usage_trends_query(self, since, models):
         sql = """

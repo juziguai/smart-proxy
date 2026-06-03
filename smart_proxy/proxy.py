@@ -1,7 +1,7 @@
 """Smart proxy sidecar — auto-detect Windows system proxy per request."""
 import asyncio
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import logging
 import os
@@ -76,6 +76,14 @@ class ForwardResult:
 
 
 proxy_cache = Cache(CACHE_SEC)
+DOCTOR_DB_INTEGRITY_CACHE = {
+    "checked_at": 0.0,
+    "db_mtime": None,
+    "db_size": None,
+    "integrity": None,
+    "integrity_ms": None,
+}
+DOCTOR_DB_INTEGRITY_CACHE_SECONDS = 30 * 60
 
 # ── whitelist ────────────────────────────────────────────────────────
 
@@ -364,46 +372,92 @@ async def build_doctor_report():
         else:
             db_size_mb = db_path.stat().st_size / (1024 * 1024)
             
-            io_start = time.time()
+            total_check_start = time.time()
             conn = sqlite3.connect(db_path, timeout=2.0)
             cursor = conn.cursor()
             
-            # SQLite PRAGMA 完整性校验
-            cursor.execute("PRAGMA integrity_check;")
-            integrity = cursor.fetchone()[0]
+            cache_age = total_check_start - float(
+                DOCTOR_DB_INTEGRITY_CACHE.get("checked_at") or 0.0
+            )
+            cache_valid = (
+                DOCTOR_DB_INTEGRITY_CACHE.get("integrity") is not None
+                and cache_age < DOCTOR_DB_INTEGRITY_CACHE_SECONDS
+            )
+            if cache_valid:
+                integrity = DOCTOR_DB_INTEGRITY_CACHE["integrity"]
+                integrity_ms = int(DOCTOR_DB_INTEGRITY_CACHE["integrity_ms"] or 0)
+                integrity_cached = True
+            else:
+                integrity_start = time.time()
+                cursor.execute("PRAGMA integrity_check;")
+                integrity = cursor.fetchone()[0]
+                integrity_ms = int((time.time() - integrity_start) * 1000)
+                DOCTOR_DB_INTEGRITY_CACHE.update(
+                    {
+                        "checked_at": time.time(),
+                        "db_mtime": db_path.stat().st_mtime,
+                        "db_size": db_path.stat().st_size,
+                        "integrity": integrity,
+                        "integrity_ms": integrity_ms,
+                    }
+                )
+                integrity_cached = False
             if integrity != "ok":
                 raise ValueError(f"SQLite 完整性校验失败: {integrity}")
                 
-            # 统计累计请求记录数
+            query_start = time.time()
             cursor.execute("SELECT COUNT(*) FROM proxy_requests;")
             total_requests = cursor.fetchone()[0]
+            cutoff_iso = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
             cursor.execute(
                 """
                 SELECT COUNT(*)
                 FROM proxy_requests
-                WHERE datetime(started_at) >= datetime('now', '-7 days')
-                """
+                WHERE started_at >= ?
+                """,
+                (cutoff_iso,),
             )
             retained_requests = cursor.fetchone()[0]
+            query_ms = int((time.time() - query_start) * 1000)
             
-            # I/O 读写性能实测压测
-            cursor.execute("CREATE TABLE IF NOT EXISTS __doctor_io_test (id INTEGER PRIMARY KEY, val TEXT);")
-            cursor.execute("INSERT INTO __doctor_io_test (val) VALUES ('diagnose');")
-            cursor.execute("SELECT val FROM __doctor_io_test WHERE val = 'diagnose';")
-            cursor.execute("DROP TABLE __doctor_io_test;")
-            conn.commit()
+            write_start = time.time()
+            try:
+                cursor.execute("BEGIN IMMEDIATE;")
+                cursor.execute("CREATE TABLE IF NOT EXISTS __doctor_io_test (id INTEGER PRIMARY KEY, val TEXT);")
+                cursor.execute("INSERT INTO __doctor_io_test (val) VALUES ('diagnose');")
+                cursor.execute("SELECT val FROM __doctor_io_test WHERE val = 'diagnose';")
+                cursor.execute("DROP TABLE __doctor_io_test;")
+                conn.rollback()
+            except Exception:
+                conn.rollback()
+                raise
+            write_ms = int((time.time() - write_start) * 1000)
             conn.close()
             
-            io_ms = int((time.time() - io_start) * 1000)
+            check_ms = int((time.time() - total_check_start) * 1000)
             old_requests = max(0, total_requests - retained_requests)
-            db_msg = f"连接正常 · 完整性 {integrity} · 累计请求 {total_requests} 条 · 大小 {db_size_mb:.2f} MB · I/O 延迟 {io_ms}ms"
+            integrity_text = (
+                f"{integrity_ms}ms"
+                if not integrity_cached
+                else f"{integrity_ms}ms(缓存)"
+            )
+            db_msg = (
+                f"连接正常 · 完整性 {integrity} · 累计请求 {total_requests} 条 "
+                f"· 大小 {db_size_mb:.2f} MB · 健康检查 {check_ms}ms "
+                f"(完整性 {integrity_text} / 统计 {query_ms}ms / 写入 {write_ms}ms)"
+            )
             db_data = {
                 "integrity": integrity,
                 "total_requests": total_requests,
                 "retained_requests_7d": retained_requests,
                 "prunable_requests_7d": old_requests,
                 "size_mb": round(db_size_mb, 2),
-                "io_ms": io_ms,
+                "io_ms": check_ms,
+                "check_ms": check_ms,
+                "integrity_ms": integrity_ms,
+                "integrity_cached": integrity_cached,
+                "query_ms": query_ms,
+                "write_ms": write_ms,
                 "retention_days": 7,
             }
             db_actions = [
@@ -415,9 +469,15 @@ async def build_doctor_report():
                 }
             ]
             
-            if io_ms > 100:
+            if write_ms > 100:
                 db_status = "warning"
-                db_msg += " (I/O 延迟较高，可能存在磁盘写入瓶颈)"
+                db_msg += " (写入测试较慢，可能存在磁盘写入瓶颈)"
+            elif query_ms > 500:
+                db_status = "warning"
+                db_msg += " (统计查询较慢，建议检查索引或清理历史统计)"
+            elif check_ms > 1000:
+                db_status = "warning"
+                db_msg += " (健康检查耗时较高，完整性校验可能正在全库扫描)"
     except Exception as e:
         db_ok = False
         db_status = "error"
@@ -1591,7 +1651,18 @@ def kill_process_by_port(port: int) -> bool:
 
 async def main():
     global stats_store
+    profiler_logger.info(
+        "smart-proxy process starting "
+        f"pid={os.getpid()} python={sys.version.split()[0]} executable={sys.executable} "
+        f"cwd={os.getcwd()}"
+    )
     stats_store = StatsStore(STATS_DB_FILE)
+    profiler_logger.info(
+        "smart-proxy config "
+        f"proxy={LISTEN_HOST}:{LISTEN_PORT} dashboard={DASHBOARD_HOST}:{DASHBOARD_PORT} "
+        f"cache_sec={CACHE_SEC} read_size={READ_SIZE} stats_db={Path(STATS_DB_FILE).resolve()} "
+        f"whitelist={Path(WHITELIST_FILE).resolve()} blocklist={Path(BLOCKLIST_FILE).resolve()}"
+    )
     
     # 启动异步日志缓冲消费中台
     start_async_logging_listener()
@@ -1661,11 +1732,23 @@ async def main():
 
         log(f"listening {LISTEN_HOST}:{LISTEN_PORT}  |  mode: auto-detect Windows system proxy  |  cache: {CACHE_SEC}s")
         log(f"dashboard http://{DASHBOARD_HOST}:{DASHBOARD_PORT}")
+        runtime_status = build_runtime_status()
+        profiler_logger.info(
+            f"smart-proxy serving pid={os.getpid()} proxy={LISTEN_HOST}:{LISTEN_PORT} "
+            f"dashboard={DASHBOARD_HOST}:{DASHBOARD_PORT} upstream={runtime_status['upstream_proxy']} "
+            f"whitelist_count={runtime_status['whitelist_count']}"
+        )
         asyncio.create_task(run_usage_ingestion_loop(stats_store, log=log))
         async with server, dashboard:
             await asyncio.gather(server.serve_forever(), dashboard.serve_forever())
+    except Exception:
+        profiler_logger.exception(f"smart-proxy main crashed pid={os.getpid()}")
+        raise
     finally:
         # 3. 优雅退出：冲刷剩余未写入磁盘的日志并关闭线程池
+        profiler_logger.info(
+            f"smart-proxy main exiting pid={os.getpid()} uptime_sec={time.time() - START_TIME:.1f}"
+        )
         await shutdown_async_logging()
 
 

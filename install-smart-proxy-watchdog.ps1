@@ -12,6 +12,12 @@ if (-not (Test-Path -LiteralPath $WatchdogScript)) {
     throw "watchdog script not found: $WatchdogScript"
 }
 
+function Get-WindowsServiceWatchdog {
+    Get-CimInstance Win32_Service -ErrorAction SilentlyContinue | Where-Object {
+        $_.Name -eq $TaskName -and $_.PathName -like "*smart-proxy-service.py*"
+    }
+}
+
 function Get-StartupFallbackPath {
     $startup = [Environment]::GetFolderPath([Environment+SpecialFolder]::Startup)
     return (Join-Path $startup "$TaskName.vbs")
@@ -74,6 +80,13 @@ if ($Uninstall) {
         Write-Host "[watchdog] scheduled task not found: $TaskName"
     }
     Remove-StartupFallback
+    return
+}
+
+$serviceWatchdog = Get-WindowsServiceWatchdog
+if ($serviceWatchdog) {
+    Remove-StartupFallback
+    Write-Host "[watchdog] Windows Service '$($serviceWatchdog.Name)' already manages smart-proxy; legacy scheduled task/startup fallback will not be installed." -ForegroundColor Yellow
     return
 }
 

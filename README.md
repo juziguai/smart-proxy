@@ -2,13 +2,20 @@
 
 Windows 本地智能代理 sidecar。
 
-当前版本：`v0.4.0`
+当前版本：`v0.4.1`
 
 它固定监听 `127.0.0.1:8889`，由 Claude Code、Antigravity、Cockpit Tools 等客户端连接；请求进来后，smart-proxy 会按当前 Windows 系统代理状态、白名单和本地规则决定直连还是转发到上游代理。
 
 同时提供一个本地 Dashboard：`http://127.0.0.1:8890`，用于查看连接、延迟、错误、用量和运行状态。
 
 ## 更新摘要
+
+`v0.4.1` 聚焦运行稳定性、守护唯一性和 Doctor 数据库诊断性能：
+
+- watchdog 增强进程消失归因日志，记录 PID、父进程、端口归属、重启前后快照和启动捕获文件。
+- Windows Service 成为唯一推荐守护入口；旧 Startup fallback 会被清理，手动重复启动 watchdog 会自动退出。
+- Doctor 数据库检查拆分完整性、统计查询、写入测试耗时，并缓存完整性校验，避免每次打开全库扫描。
+- 统计库补充 `started_at` 相关索引，主要时间窗口查询改为索引友好的范围过滤。
 
 `v0.4.0` 将 smart-proxy 从普通后台脚本升级为 Windows Service 兜底的本地网关：
 

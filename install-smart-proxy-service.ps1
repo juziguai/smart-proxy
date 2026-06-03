@@ -58,6 +58,19 @@ function Get-LegacyWatchdogProcesses {
     })
 }
 
+function Remove-LegacyStartupFallback {
+    if ($KeepLegacyWatchdog) {
+        return
+    }
+
+    $startup = [Environment]::GetFolderPath([Environment+SpecialFolder]::Startup)
+    $path = Join-Path $startup "$ServiceName.vbs"
+    if (Test-Path -LiteralPath $path) {
+        Remove-Item -LiteralPath $path -Force
+        Write-Host "[service] removed legacy startup fallback: $path" -ForegroundColor Yellow
+    }
+}
+
 function Stop-LegacyWatchdogProcesses {
     if ($KeepLegacyWatchdog) {
         return
@@ -68,6 +81,7 @@ function Stop-LegacyWatchdogProcesses {
         Write-Host "[service] stopping legacy watchdog PID $($process.ProcessId)" -ForegroundColor Yellow
         Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
     }
+    Remove-LegacyStartupFallback
 }
 
 function Invoke-ServiceCommand {
@@ -135,6 +149,7 @@ if (-not (Test-IsAdmin)) {
 
 if ($Uninstall) {
     Invoke-ServiceCommand -Command "remove"
+    Remove-LegacyStartupFallback
     return
 }
 
