@@ -2,6 +2,7 @@
 
 import ctypes
 from ctypes import wintypes
+import json
 from pathlib import Path
 import socket
 import subprocess
@@ -217,19 +218,133 @@ def query_process_command_line(pid):
     return result.stdout.strip()
 
 
-def classify_client_process(process_name, exe_path, command_line):
-    text = f"{process_name}\n{exe_path}\n{command_line}".lower()
+def query_process_chain(pid, max_depth=8):
+    if not pid or sys.platform != "win32":
+        return []
+
+    command = (
+        "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; "
+        f"$targetPid = {int(pid)}; $items = @(); "
+        f"for ($i = 0; $i -lt {int(max_depth)} -and $targetPid; $i++) {{ "
+        "$p = Get-CimInstance Win32_Process -Filter \"ProcessId = $targetPid\"; "
+        "if (-not $p) { break }; "
+        "$items += [pscustomobject]@{"
+        "pid=$p.ProcessId; name=$p.Name; commandLine=$p.CommandLine; parent=$p.ParentProcessId"
+        "}; "
+        "$targetPid = $p.ParentProcessId; "
+        "} "
+        "$items | ConvertTo-Json -Depth 3 -Compress"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", command],
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            timeout=2.0,
+            check=False,
+        )
+    except Exception:
+        return []
+    if result.returncode != 0 or not result.stdout.strip():
+        return []
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return []
+    if isinstance(payload, dict):
+        payload = [payload]
+    if not isinstance(payload, list):
+        return []
+    chain = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        chain.append(
+            {
+                "pid": item.get("pid"),
+                "name": item.get("name") or "",
+                "command_line": item.get("commandLine") or "",
+                "parent": item.get("parent"),
+            }
+        )
+    return chain
+
+
+def process_chain_text(process_chain):
+    names = []
+    for item in reversed(process_chain or []):
+        name = item.get("name") or ""
+        if name:
+            names.append(name)
+    return " > ".join(names)
+
+
+def classify_client_process(process_name, exe_path, command_line, process_chain=None):
+    chain_text = "\n".join(
+        f"{item.get('name', '')}\n{item.get('command_line', '')}"
+        for item in (process_chain or [])
+    )
+    text = f"{process_name}\n{exe_path}\n{command_line}\n{chain_text}".lower()
+    normalized = text.replace("\\", "/")
+    if "smart-proxy-watchdog.ps1" in normalized:
+        return "Smart Proxy Watchdog"
+    if "smart-proxy.py" in normalized:
+        return "Smart Proxy"
     if "antigravity" in text or "language_server" in text:
         return "Antigravity"
     if "cockpit" in text:
         return "Cockpit Tools"
-    if "claude" in text or "claude-code" in text or "claude_code" in text:
-        return "Claude Code"
     if "codex" in text:
         return "Codex"
+    if (
+        "claude.cmd" in normalized
+        or "claude-code/cli.cjs" in normalized
+        or "claude-code-max/cli.cjs" in normalized
+        or "claude_code/cli.cjs" in normalized
+    ):
+        return "Claude Code"
     if "chrome" in text:
         return "Chrome"
     return "Unknown"
+
+
+def client_identity(process_name, exe_path, command_line="", process_chain=None):
+    label = classify_client_process(process_name, exe_path, command_line, process_chain)
+    chain = process_chain_text(process_chain)
+    chain_detail = "\n".join(
+        f"{item.get('name', '')}\n{item.get('command_line', '')}"
+        for item in (process_chain or [])
+    )
+    normalized = f"{process_name}\n{exe_path}\n{command_line}\n{chain}\n{chain_detail}".lower().replace("\\", "/")
+    evidence_parts = []
+
+    if process_name:
+        evidence_parts.append(process_name)
+    if label == "Claude Code":
+        if "bun.exe" in normalized or "bun " in normalized:
+            evidence_parts.append("bun.exe")
+        if "node.exe" in normalized or "node " in normalized:
+            evidence_parts.append("node.exe")
+        if "claude.cmd" in normalized:
+            evidence_parts.append("claude.cmd")
+        if "cli.cjs" in normalized:
+            evidence_parts.append("cli.cjs")
+    elif label != "Unknown":
+        evidence_parts.append(label)
+    if chain:
+        evidence_parts.append(f"chain: {chain}")
+
+    evidence = " + ".join(dict.fromkeys(part for part in evidence_parts if part))
+    if not evidence:
+        evidence = "pid matched active TCP connection"
+
+    return {
+        "label": label,
+        "evidence": evidence,
+        "chain": chain,
+    }
 
 
 
@@ -245,15 +360,20 @@ def _bg_query_command_line(pid, exe_path, process_name):
         cmd_line = query_process_command_line(pid)
     except Exception:
         cmd_line = ""
+    try:
+        process_chain = query_process_chain(pid)
+    except Exception:
+        process_chain = []
 
-    # 解析出高精度分类结果
-    lbl = classify_client_process(process_name, exe_path, cmd_line)
+    identity = client_identity(process_name, exe_path, cmd_line, process_chain)
 
     info = {
         "pid": pid,
         "process": process_name,
         "exe": exe_path,
-        "label": lbl,
+        "label": identity["label"],
+        "evidence": identity["evidence"],
+        "chain": identity["chain"],
     }
     # 热更新全局进程信息缓存
     PROCESS_INFO_CACHE[pid] = {
@@ -269,6 +389,8 @@ def unknown_client_process():
         "process": "",
         "exe": "",
         "label": "Unknown",
+        "evidence": "no active TCP owner process found",
+        "chain": "",
     }
 
 
@@ -292,19 +414,21 @@ def resolve_client_process(client_addr, client_port):
     process_name = Path(exe_path).name if exe_path else ""
 
     # 基于 EXE 映像路径做快速粗归类
-    lbl = classify_client_process(process_name, exe_path, "")
+    identity = client_identity(process_name, exe_path, "")
 
     info = {
         "pid": pid,
         "process": process_name,
         "exe": exe_path,
-        "label": lbl,
+        "label": identity["label"],
+        "evidence": identity["evidence"],
+        "chain": identity["chain"],
     }
 
     # 3. 智能双轨分流：判定是否需要高精度的 CommandLine（如 node, bun, python 或者是 Unknown）
     needs_precise = (
         process_name.lower() in ("node.exe", "bun.exe", "python.exe", "pythonw.exe", "cmd.exe", "")
-        or lbl == "Unknown"
+        or identity["label"] == "Unknown"
     )
 
     if needs_precise and pid not in _PENDING_PIDS:

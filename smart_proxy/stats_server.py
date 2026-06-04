@@ -4,6 +4,8 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from .config import DEFAULT_CONFIG
+from .provider_classifier import classify_provider, get_provider_rules_status
+from .stats_store import SLOW_REQUEST_THRESHOLD_MS
 
 
 DASHBOARD_HOST = DEFAULT_CONFIG.dashboard_host
@@ -36,6 +38,190 @@ def build_text_response(status, text, content_type):
 
 def read_text_asset(path):
     return path.read_text(encoding="utf-8")
+
+
+def ratio_text(count, total):
+    return f"{count / total * 100:.1f}%" if total else "0.0%"
+
+
+def build_provider_ranking_from_activity(activity):
+    provider_counts = {}
+    provider_meta = {}
+    for row in activity:
+        provider = row["provider"]
+        if provider not in provider_counts:
+            provider_counts[provider] = {
+                "count": 0,
+                "failed_requests": 0,
+                "slow_requests": 0,
+                "last_seen_at": "",
+            }
+            provider_meta[provider] = {
+                key: row.get(key)
+                for key in (
+                    "provider_key",
+                    "provider",
+                    "provider_name",
+                    "provider_kind",
+                    "is_model_provider",
+                    "provider_source",
+                    "provider_match",
+                    "provider_evidence",
+                    "provider_confidence",
+                )
+            }
+        bucket = provider_counts[provider]
+        bucket["count"] += 1
+        if not row.get("success"):
+            bucket["failed_requests"] += 1
+        if (row.get("connect_latency_ms") or 0) >= SLOW_REQUEST_THRESHOLD_MS:
+            bucket["slow_requests"] += 1
+        if row.get("started_at") and row["started_at"] > bucket["last_seen_at"]:
+            bucket["last_seen_at"] = row["started_at"]
+
+    total = sum(item["count"] for item in provider_counts.values())
+    ranking = []
+    for provider, bucket in sorted(
+        provider_counts.items(),
+        key=lambda item: item[1]["count"],
+        reverse=True,
+    ):
+        count = bucket["count"]
+        ranking.append(
+            {
+                **provider_meta[provider],
+                **bucket,
+                "ratio": ratio_text(count, total),
+                "failure_rate": ratio_text(bucket["failed_requests"], count),
+            }
+        )
+    return ranking
+
+
+def is_real_claude_host(row):
+    host = (row.get("host") or "").strip().lower()
+    return host not in {"", "unknown", "(unknown)", "-"}
+
+
+def is_claude_noise(row):
+    return (
+        not is_real_claude_host(row)
+        or (row.get("stage") or "") in {"client_closed", "read_timeout", "parse_failed"}
+    )
+
+
+def build_process_topology(pids):
+    primary = None
+    for item in pids:
+        if item.get("chain"):
+            primary = item
+            break
+    primary = primary or (pids[0] if pids else None)
+    if not primary:
+        return {"nodes": [], "evidence": "waiting for process chain evidence"}
+
+    chain = primary.get("chain") or primary.get("process") or "unknown process"
+    names = [part.strip() for part in chain.split(">") if part.strip()]
+    if not names:
+        names = [primary.get("process") or "unknown process"]
+    nodes = []
+    for index, name in enumerate(names):
+        nodes.append(
+            {
+                "label": name,
+                "pid": primary.get("pid") if index == len(names) - 1 else None,
+                "role": "cli" if index == len(names) - 1 else "parent",
+            }
+        )
+    return {
+        "nodes": nodes,
+        "evidence": primary.get("evidence") or "Claude Code telemetry match",
+    }
+
+
+def build_claude_code_panel(activity, provider_ranking, unknown_hosts):
+    meaningful_activity = [row for row in activity if not is_claude_noise(row)]
+    model_activity = [row for row in meaningful_activity if row.get("is_model_provider")]
+    total = len(meaningful_activity)
+    failed = sum(1 for row in meaningful_activity if not row.get("success"))
+    slow = sum(
+        1
+        for row in meaningful_activity
+        if (row.get("connect_latency_ms") or 0) >= SLOW_REQUEST_THRESHOLD_MS
+    )
+    model_provider_mix = [
+        item for item in provider_ranking if item.get("is_model_provider")
+    ]
+
+    pids = []
+    seen_pids = set()
+    for row in activity:
+        pid = row.get("client_pid")
+        if not pid or pid in seen_pids:
+            continue
+        seen_pids.add(pid)
+        pids.append(
+            {
+                "pid": pid,
+                "process": row.get("client_process") or "unknown",
+                "evidence": row.get("client_evidence") or "Claude Code telemetry match",
+                "chain": row.get("client_chain") or "",
+            }
+        )
+        if len(pids) >= 5:
+            break
+
+    recent_errors = []
+    for row in meaningful_activity:
+        if row.get("success") and not row.get("error"):
+            continue
+        recent_errors.append(
+            {
+                "started_at": row.get("started_at") or "",
+                "host": row.get("host") or "",
+                "provider": row.get("provider") or "Unknown Provider",
+                "stage": row.get("stage") or "",
+                "error": row.get("error") or "request failed",
+            }
+        )
+        if len(recent_errors) >= 5:
+            break
+
+    last_switch = None
+    previous = None
+    for row in reversed(model_activity):
+        if not row.get("is_model_provider"):
+            continue
+        current = {
+            "key": row.get("provider_key"),
+            "provider": row.get("provider"),
+            "started_at": row.get("started_at"),
+        }
+        if previous and current["key"] != previous["key"]:
+            last_switch = {
+                "started_at": current["started_at"],
+                "from": previous["provider"],
+                "to": current["provider"],
+            }
+        previous = current
+
+    return {
+        "total_requests": total,
+        "failed_requests": failed,
+        "failure_rate": ratio_text(failed, total),
+        "slow_requests": slow,
+        "current_pids": pids,
+        "process_topology": build_process_topology(pids),
+        "provider_mix": model_provider_mix,
+        "unknown_hosts": unknown_hosts,
+        "recent_errors": recent_errors,
+        "last_provider_switch": last_switch,
+        "ignored_noise_requests": len(activity) - len(meaningful_activity),
+        "capability_boundary": (
+            "代理层基于 CONNECT Host 判断访问了哪个服务商；HTTPS 内部模型名、prompt、token "
+            "需要结合 Claude Code usage jsonl、环境变量、启动脚本选择或服务商日志确认。"
+        ),
+    }
 
 
 def handle_stats_request(
@@ -169,54 +355,98 @@ def handle_stats_request(
                 "ratio": pct
             })
 
-        # 2. 大模型厂商分类聚合（排除非大模型噪点，归入 Other）
-        host_raw = raw_data.get("host", [])
-        provider_counts = {}
+        def provider_ranking_from_hosts(host_rows):
+            provider_counts = {}
+            provider_meta = {}
+            for host_row in host_rows:
+                meta = classify_provider(host_row["host"])
+                provider = meta["provider"]
+                provider_counts[provider] = provider_counts.get(provider, 0) + host_row["count"]
+                provider_meta[provider] = meta
 
-        def _get_provider(h):
-            hl = h.lower()
-            if not hl or hl == "unknown":
-                return "Other (其他网络流量)"
-            if "xiaomimimo" in hl:
-                return "MiMo (小米中转)"
-            if "deepseek" in hl:
-                return "DeepSeek (深度求索)"
-            if "minimax" in hl:
-                return "MiniMax (海螺AI)"
-            if "anthropic" in hl:
-                return "Anthropic (Claude)"
-            if "openai" in hl or "chatgpt" in hl:
-                return "OpenAI (ChatGPT/Codex)"
-            if "googleapis" in hl or "google" in hl:
-                if hl == "dns.google":
-                    return "Other (其他网络流量)"
-                return "Google (Gemini)"
-            # 其他开发或基础通信，归入 Other 保持大屏干净
-            return "Other (其他网络流量)"
+            total_requests = sum(provider_counts.values())
+            ranking = []
+            for provider, count in sorted(provider_counts.items(), key=lambda x: x[1], reverse=True):
+                pct = f"{count / total_requests * 100:.1f}%" if total_requests > 0 else "0.0%"
+                ranking.append({
+                    **provider_meta[provider],
+                    "provider": provider,
+                    "count": count,
+                    "ratio": pct,
+                })
+            return ranking
 
-        for h in host_raw:
-            provider = _get_provider(h["host"])
-            provider_counts[provider] = provider_counts.get(provider, 0) + h["count"]
+        provider_ranking = provider_ranking_from_hosts(raw_data.get("host", []))
+        claude_activity = raw_data.get("claude_code_activity", [])
+        claude_meaningful_activity = [
+            row for row in claude_activity if not is_claude_noise(row)
+        ]
+        claude_code_provider_ranking = (
+            build_provider_ranking_from_activity(claude_meaningful_activity)
+            if claude_meaningful_activity
+            else provider_ranking_from_hosts(raw_data.get("claude_code_host", []))
+        )
+        claude_code_unknown_hosts = []
+        unknown_host_counts = {}
+        for row in claude_meaningful_activity:
+            if row.get("provider_key") == "unknown" and is_real_claude_host(row):
+                host = row.get("host") or "unknown"
+                unknown_host_counts[host] = unknown_host_counts.get(host, 0) + 1
+        if unknown_host_counts:
+            for host, count in sorted(unknown_host_counts.items(), key=lambda item: item[1], reverse=True):
+                meta = classify_provider(host)
+                claude_code_unknown_hosts.append(
+                    {
+                        "host": host,
+                        "count": count,
+                        **meta,
+                    }
+                )
+        else:
+            for host_row in raw_data.get("claude_code_host", []):
+                meta = classify_provider(host_row["host"])
+                if meta["provider_key"] == "unknown":
+                    claude_code_unknown_hosts.append(
+                        {
+                            "host": host_row["host"],
+                            "count": host_row["count"],
+                            **meta,
+                        }
+                    )
 
-        total_provider_requests = sum(provider_counts.values())
-        provider_ranking = []
-        for prov, cnt in sorted(provider_counts.items(), key=lambda x: x[1], reverse=True):
-            pct = f"{cnt / total_provider_requests * 100:.1f}%" if total_provider_requests > 0 else "0.0%"
-            provider_ranking.append({
-                "provider": prov,
-                "count": cnt,
-                "ratio": pct
-            })
+        claude_total = len(claude_meaningful_activity)
+        claude_model_total = sum(
+            item["count"]
+            for item in claude_code_provider_ranking
+            if item.get("is_model_provider")
+        )
 
         return build_stats_response(
             200,
             {
                 "software_ranking": software_ranking[:10],
                 "provider_ranking": provider_ranking,
+                "claude_code_provider_ranking": claude_code_provider_ranking,
+                "claude_code_unknown_hosts": claude_code_unknown_hosts[:10],
+                "claude_code_panel": build_claude_code_panel(
+                    claude_activity,
+                    claude_code_provider_ranking,
+                    claude_code_unknown_hosts[:10],
+                ),
+                "claude_code_summary": {
+                    "total_requests": claude_total,
+                    "model_provider_requests": claude_model_total,
+                    "unknown_provider_requests": sum(
+                        item["count"] for item in claude_code_unknown_hosts
+                    ),
+                },
                 "range": range_name,
                 "since": since_iso
             }
         )
+
+    if method == "GET" and parsed_url.path == "/api/provider-rules":
+        return build_stats_response(200, get_provider_rules_status())
 
     if method == "GET" and parsed_url.path == "/api/doctor":
         if doctor_provider is None:

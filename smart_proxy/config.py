@@ -21,6 +21,7 @@ class SmartProxyConfig:
     blocklist_reload_sec: int
     stats_db_file: Path
     provider_health_path: Path
+    provider_rules_path: Path
 
 
 DEFAULTS = {
@@ -36,6 +37,7 @@ DEFAULTS = {
     "blocklist_reload_sec": 60,
     "stats_db_file": "smart-proxy-stats.db",
     "provider_health_path": "logs/provider-health.json",
+    "provider_rules_path": "provider-rules.json",
 }
 
 ENV_KEYS = {
@@ -51,6 +53,7 @@ ENV_KEYS = {
     "SMART_PROXY_BLOCKLIST_RELOAD_SEC": "blocklist_reload_sec",
     "SMART_PROXY_STATS_DB_FILE": "stats_db_file",
     "SMART_PROXY_PROVIDER_HEALTH_PATH": "provider_health_path",
+    "SMART_PROXY_PROVIDER_RULES_PATH": "provider_rules_path",
 }
 
 INT_FIELDS = {
@@ -67,6 +70,7 @@ PATH_FIELDS = {
     "blocklist_file",
     "stats_db_file",
     "provider_health_path",
+    "provider_rules_path",
 }
 
 

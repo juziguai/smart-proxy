@@ -48,11 +48,121 @@
     const refreshTrafficAnalytics = async () => {
       const softwareList = document.getElementById('analyticsSoftwareList');
       const providerList = document.getElementById('analyticsProviderList');
+      const claudeCodePanel = document.getElementById('claudeCodePanel');
+      const providerColorClass = item => {
+        const key = item?.provider_key || '';
+        if (key === 'openai') return 'openai-bar';
+        if (key === 'anthropic') return 'anthropic-bar';
+        if (key === 'google') return 'google-bar';
+        if (key === 'deepseek') return 'deepseek-bar';
+        if (key === 'mimo') return 'mimo-bar';
+        return 'other-bar';
+      };
+      const providerRows = items => (items || []).map(item => `
+        <div class="analytics-row">
+          <div class="analytics-label">
+            <span class="provider-name">${escapeHtml(item.provider)}</span>
+            <span class="provider-count">${item.count} 次 (${item.ratio})</span>
+          </div>
+          <div class="provider-evidence">${escapeHtml(item.provider_evidence || item.provider_match || '规则匹配')}</div>
+          <div class="analytics-progress-bg">
+            <div class="analytics-progress-bar ${providerColorClass(item)}" style="width: ${item.ratio}"></div>
+          </div>
+        </div>
+      `).join('');
+      const unknownHostRows = items => (items || []).map(item => `
+        <div class="analytics-row provider-unknown-row">
+          <div class="analytics-label">
+            <span class="provider-name">${escapeHtml(item.host)}</span>
+            <span class="provider-count">${item.count} 次</span>
+          </div>
+          <div class="provider-evidence">Claude Code CLI 未匹配模型服务商规则，可加入 provider-rules.json</div>
+        </div>
+      `).join('');
+      const renderMiniMetric = (label, value, tone = '') => `
+        <div class="claude-metric ${tone}">
+          <span>${escapeHtml(label)}</span>
+          <strong>${escapeHtml(String(value))}</strong>
+        </div>
+      `;
+      const renderClaudeCodePanel = panel => {
+        if (!panel || !panel.total_requests) {
+          return '<div class="table-empty">暂无 Claude Code CLI 流量</div>';
+        }
+        const topology = panel.process_topology || {};
+        const topologyNodes = (topology.nodes || []).length
+          ? topology.nodes.map((node, index) => `
+              <div class="process-topology-node ${escapeHtml(node.role || '')}">
+                <strong>${escapeHtml(node.label || 'unknown')}</strong>
+                ${node.pid ? `<span>PID ${escapeHtml(String(node.pid))}</span>` : '<span>parent</span>'}
+              </div>
+              ${index < topology.nodes.length - 1 ? '<div class="process-topology-edge">→</div>' : ''}
+            `).join('')
+          : '<div class="table-empty">等待进程链证据</div>';
+        const providerRows = (panel.provider_mix || []).slice(0, 5).map(item => `
+          <div class="claude-provider-row">
+            <span>${escapeHtml(item.provider)}</span>
+            <strong>${fmt.format(item.count || 0)} 次 · ${escapeHtml(item.ratio || '0.0%')}</strong>
+            <small title="${escapeHtml(item.provider_evidence || '')}">
+              失败 ${escapeHtml(item.failure_rate || '0.0%')} · 慢 ${fmt.format(item.slow_requests || 0)} · ${escapeHtml(item.provider_evidence || '规则匹配')}
+            </small>
+          </div>
+        `).join('');
+        const unknownRows = (panel.unknown_hosts || []).slice(0, 3).map(item => `
+          <div class="claude-alert-row">
+            <strong>${escapeHtml(item.host)}</strong>
+            <span>${fmt.format(item.count || 0)} 次 · 建议加入 provider-rules.json</span>
+          </div>
+        `).join('');
+        const errorRows = (panel.recent_errors || []).slice(0, 3).map(item => `
+          <div class="claude-alert-row">
+            <strong>${escapeHtml(item.provider)} · ${escapeHtml(item.host)}</strong>
+            <span>${escapeHtml(item.stage || 'failed')} · ${escapeHtml(item.error || 'request failed')}</span>
+          </div>
+        `).join('');
+        const switchText = panel.last_provider_switch
+          ? `${new Date(panel.last_provider_switch.started_at).toLocaleTimeString()} · ${panel.last_provider_switch.from} → ${panel.last_provider_switch.to}`
+          : '今日暂无切换';
+        return `
+          <div class="claude-card">
+            <div class="claude-card-title">当前 CLI 进程链</div>
+            <div class="process-topology">${topologyNodes}</div>
+            <p class="provider-evidence">${escapeHtml(topology.evidence || '等待进程链证据')}</p>
+          </div>
+          <div class="claude-card">
+            <div class="claude-card-title">今日概览</div>
+            <div class="claude-metrics">
+              ${renderMiniMetric('请求', fmt.format(panel.total_requests || 0))}
+              ${renderMiniMetric('失败率', panel.failure_rate || '0.0%', (panel.failed_requests || 0) ? 'bad' : 'good')}
+              ${renderMiniMetric('慢请求', fmt.format(panel.slow_requests || 0))}
+            </div>
+            <p class="provider-evidence">最近切换：${escapeHtml(switchText)}</p>
+            ${panel.ignored_noise_requests ? `<p class="provider-evidence">已忽略无 Host 断连噪声 ${fmt.format(panel.ignored_noise_requests)} 条</p>` : ''}
+          </div>
+          <div class="claude-card wide">
+            <div class="claude-card-title">服务商占比</div>
+            <div class="claude-provider-list">${providerRows || '<div class="table-empty">暂无服务商数据</div>'}</div>
+          </div>
+          <div class="claude-card">
+            <div class="claude-card-title">未知 Host 建议</div>
+            ${unknownRows || '<div class="table-empty">暂无未识别模型服务商 Host</div>'}
+          </div>
+          <div class="claude-card">
+            <div class="claude-card-title">最近错误</div>
+            ${errorRows || '<div class="table-empty">暂无错误</div>'}
+          </div>
+          <div class="claude-card wide">
+            <div class="claude-card-title">能力边界</div>
+            <p class="provider-evidence">${escapeHtml(panel.capability_boundary || '')}</p>
+          </div>
+        `;
+      };
 
       try {
         const res = await fetch(`/api/traffic-analytics?range=${analyticsRange}`, { cache: 'no-store' });
         if (!res.ok) throw new Error('API returns ' + res.status);
         const data = await res.json();
+        claudeCodePanel.innerHTML = renderClaudeCodePanel(data.claude_code_panel);
 
         // 渲染软件活跃排行榜
         if (!data.software_ranking || !data.software_ranking.length) {
@@ -75,27 +185,22 @@
         if (!data.provider_ranking || !data.provider_ranking.length) {
           providerList.innerHTML = '<div class="table-empty">暂无模型厂商流量数据</div>';
         } else {
-          providerList.innerHTML = data.provider_ranking.map(item => {
-            let colorClass = 'other-bar';
-            const prov = item.provider;
-            if (prov.includes('OpenAI')) colorClass = 'openai-bar';
-            else if (prov.includes('Anthropic')) colorClass = 'anthropic-bar';
-            else if (prov.includes('Google')) colorClass = 'google-bar';
-            else if (prov.includes('DeepSeek')) colorClass = 'deepseek-bar';
-            else if (prov.includes('MiMo')) colorClass = 'mimo-bar';
-
-            return `
-              <div class="analytics-row">
-                <div class="analytics-label">
-                  <span class="provider-name">${escapeHtml(prov)}</span>
-                  <span class="provider-count">${item.count} 次 (${item.ratio})</span>
-                </div>
-                <div class="analytics-progress-bg">
-                  <div class="analytics-progress-bar ${colorClass}" style="width: ${item.ratio}"></div>
-                </div>
-              </div>
-            `;
-          }).join('');
+          const claudeSummary = data.claude_code_summary || {};
+          const summaryText = data.claude_code_provider_ranking && data.claude_code_provider_ranking.length
+            ? `<div class="provider-evidence">Claude Code CLI: ${fmt.format(claudeSummary.total_requests || 0)} 次请求，模型服务商 ${fmt.format(claudeSummary.model_provider_requests || 0)} 次，未识别 ${fmt.format(claudeSummary.unknown_provider_requests || 0)} 次</div>`
+            : '';
+          const claudeRows = data.claude_code_provider_ranking && data.claude_code_provider_ranking.length
+            ? `
+              <div class="analytics-section-label">Claude Code CLI</div>
+              ${summaryText}
+              ${providerRows(data.claude_code_provider_ranking)}
+              ${data.claude_code_unknown_hosts && data.claude_code_unknown_hosts.length
+                ? `<div class="analytics-section-label">Claude Code 未识别 Host</div>${unknownHostRows(data.claude_code_unknown_hosts)}`
+                : ''}
+              <div class="analytics-section-label">全部流量</div>
+            `
+            : '';
+          providerList.innerHTML = `${claudeRows}${providerRows(data.provider_ranking)}`;
         }
 
         // 更新 Meta 说明
@@ -106,6 +211,7 @@
         analyticsLoaded = true;
       } catch (error) {
         console.error('Failed to load traffic analytics:', error);
+        claudeCodePanel.innerHTML = `<div class="table-empty" style="color: #dc2626">加载失败: ${escapeHtml(error.message)}</div>`;
         softwareList.innerHTML = `<div class="table-empty" style="color: #dc2626">加载失败: ${escapeHtml(error.message)}</div>`;
         providerList.innerHTML = `<div class="table-empty" style="color: #dc2626">加载失败: ${escapeHtml(error.message)}</div>`;
       }
@@ -360,6 +466,8 @@
       document.getElementById('alertsList').innerHTML = alertRows(alerts);
       const critical = alerts.some(alert => alert.severity === 'critical');
       const warning = alerts.length > 0 && !critical;
+      panel.classList.toggle('critical', critical);
+      panel.classList.toggle('warning', warning);
       const healthText = critical
         ? '系统存在严重异常'
         : warning
@@ -372,7 +480,9 @@
       text('systemHealthSub', healthSub);
       const counts = proxy.alert_counts || { critical: 0, warning: 0 };
       document.getElementById('alertCount').textContent =
-        `${alerts.length} 条 · 严重 ${counts.critical || 0} / 提醒 ${counts.warning || 0}`;
+        alerts.length
+          ? `${alerts.length} 条 · 严重 ${counts.critical || 0} / 提醒 ${counts.warning || 0}`
+          : '无告警';
     };
     const hostRows = hosts => {
       if (!hosts.length) {
@@ -608,8 +718,11 @@
       const label = request?.client_label || 'Unknown';
       const process = request?.client_process || '';
       const pid = request?.client_pid ? ` PID ${request.client_pid}` : '';
-      return process ? `${label} / ${process}${pid}` : label;
+      const evidence = request?.client_evidence ? ` · ${request.client_evidence}` : '';
+      return process ? `${label} / ${process}${pid}${evidence}` : `${label}${evidence}`;
     };
+    const requestProviderText = request => request?.provider || 'Unknown Provider';
+    const requestProviderEvidence = request => request?.provider_evidence || '暂无识别依据';
     const clientRows = clients => {
       if (!clients.length) {
         return '<div class="row"><span>No client data</span><strong>0</strong></div>';
@@ -652,6 +765,7 @@
             </div>
             <div class="host-meta">
               <span class="pill ${statusClass}">${statusText}</span>
+              <span class="pill" title="${escapeHtml(requestProviderEvidence(request))}">${escapeHtml(requestProviderText(request))}</span>
               <span class="pill client-source" title="${escapeHtml(requestClientText(request))}">${escapeHtml(requestClientText(request))}</span>
               <span class="pill">建连 ${fmt.format(request.connect_latency_ms || 0)}ms</span>
               <span class="pill">持续 ${fmt.format(request.duration_ms || request.latency_ms || 0)}ms</span>
@@ -681,6 +795,7 @@
           <tr>
             <td>${escapeHtml(when)}</td>
             <td><strong>${escapeHtml(request.host || '-')}</strong></td>
+            <td title="${escapeHtml(requestProviderEvidence(request))}">${escapeHtml(requestProviderText(request))}</td>
             <td><span class="pill client-source" title="${escapeHtml(requestClientText(request))}">${escapeHtml(requestClientText(request))}</span></td>
             <td>${escapeHtml(request.method || '-')}</td>
             <td>${escapeHtml(routeText(request.route || '-'))}</td>
@@ -691,7 +806,7 @@
       }).join('');
       return `
         <table class="data-table">
-          <thead><tr><th>时间</th><th>Host</th><th>Client</th><th>方法</th><th>路由</th><th>状态</th><th>耗时</th></tr></thead>
+          <thead><tr><th>时间</th><th>Host</th><th>服务商</th><th>Client</th><th>方法</th><th>路由</th><th>状态</th><th>耗时</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       `;

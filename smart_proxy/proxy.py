@@ -1223,6 +1223,8 @@ def record_proxy_stats(
     client_process="",
     client_exe="",
     client_label="",
+    client_evidence="",
+    client_chain="",
 ):
     if stats_store is None:
         return
@@ -1249,6 +1251,8 @@ def record_proxy_stats(
                 client_process=client_process,
                 client_exe=client_exe,
                 client_label=client_label,
+                client_evidence=client_evidence,
+                client_chain=client_chain,
             )
         )
     except Exception as exc:
@@ -1424,6 +1428,8 @@ async def handle(client_r, client_w):
             client_process=client_info["process"],
             client_exe=client_info["exe"],
             client_label=client_info["label"],
+            client_evidence=client_info.get("evidence", ""),
+            client_chain=client_info.get("chain", ""),
         )
         client_w.close()
         return
@@ -1448,6 +1454,8 @@ async def handle(client_r, client_w):
             client_process=client_info["process"],
             client_exe=client_info["exe"],
             client_label=client_info["label"],
+            client_evidence=client_info.get("evidence", ""),
+            client_chain=client_info.get("chain", ""),
         )
         client_w.close()
         return
@@ -1475,6 +1483,8 @@ async def handle(client_r, client_w):
             client_process=client_info["process"],
             client_exe=client_info["exe"],
             client_label=client_info["label"],
+            client_evidence=client_info.get("evidence", ""),
+            client_chain=client_info.get("chain", ""),
         )
         safe_write(client_w, b"HTTP/1.1 400 Bad Request\r\n\r\n")
         client_w.close()
@@ -1510,6 +1520,8 @@ async def handle(client_r, client_w):
             client_process=client_info["process"],
             client_exe=client_info["exe"],
             client_label=client_info["label"],
+            client_evidence=client_info.get("evidence", ""),
+            client_chain=client_info.get("chain", ""),
         )
         return
 
@@ -1584,6 +1596,8 @@ async def handle(client_r, client_w):
             client_process=client_info["process"],
             client_exe=client_info["exe"],
             client_label=client_info["label"],
+            client_evidence=client_info.get("evidence", ""),
+            client_chain=client_info.get("chain", ""),
         )
         if host:
             sampled_lat = duration_ms if route in ("direct", "direct_whitelist") else (connect_latency_ms or 0.0)

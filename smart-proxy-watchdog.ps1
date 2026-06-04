@@ -93,6 +93,24 @@ function Test-TcpPort {
     }
 }
 
+function Test-LocalListeningPort {
+    param([int]$Port)
+
+    try {
+        $listeners = @(
+            Get-NetTCPConnection `
+                -LocalAddress 127.0.0.1 `
+                -LocalPort $Port `
+                -State Listen `
+                -ErrorAction SilentlyContinue
+        )
+        return $listeners.Count -gt 0
+    }
+    catch {
+        return $false
+    }
+}
+
 function Get-SmartProxyProcess {
     $resolvedProxyScript = ""
     if (Test-Path -LiteralPath $ProxyScript) {
@@ -317,8 +335,8 @@ function Test-UpstreamProxy {
 
 function Test-SmartProxyHealth {
     $processes = @(Get-SmartProxyProcess)
-    $proxyReady = Test-TcpPort -HostName "127.0.0.1" -Port $ProxyPort -TimeoutMilliseconds 1000
-    $dashboardReady = Test-TcpPort -HostName "127.0.0.1" -Port $DashboardPort -TimeoutMilliseconds 1000
+    $proxyReady = Test-LocalListeningPort -Port $ProxyPort
+    $dashboardReady = Test-LocalListeningPort -Port $DashboardPort
     $runtimeProbe = if ($dashboardReady) { Get-RuntimeStatus } else { $null }
     $runtime = if ($runtimeProbe -and $runtimeProbe.ready) { $runtimeProbe.body } else { $null }
     $upstream = if ($runtimeProbe -and $runtimeProbe.ready) {

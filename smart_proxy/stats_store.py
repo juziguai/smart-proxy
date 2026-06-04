@@ -5,6 +5,7 @@ from pathlib import Path
 import sqlite3
 
 from .pricing import aggregate_cost, estimate_usage_cost
+from .provider_classifier import classify_provider
 
 
 SLOW_REQUEST_THRESHOLD_MS = 3000
@@ -53,6 +54,8 @@ class ProxyRequestEvent:
     client_process: str = ""
     client_exe: str = ""
     client_label: str = ""
+    client_evidence: str = ""
+    client_chain: str = ""
 
 
 class StatsStore:
@@ -95,9 +98,11 @@ class StatsStore:
                         client_process,
                         client_exe,
                         client_label,
+                        client_evidence,
+                        client_chain,
                         error
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         event.started_at,
@@ -119,6 +124,8 @@ class StatsStore:
                         event.client_process,
                         event.client_exe,
                         event.client_label,
+                        event.client_evidence,
+                        event.client_chain,
                         event.error,
                     ),
                 )
@@ -162,6 +169,8 @@ class StatsStore:
                     client_process,
                     client_exe,
                     client_label,
+                    client_evidence,
+                    client_chain,
                     error
                 FROM proxy_requests
                 {where}
@@ -171,12 +180,15 @@ class StatsStore:
                 params,
             ).fetchall()
 
-        return [
-            {
+        requests = []
+        for row in rows:
+            provider = classify_provider(row["host"])
+            requests.append({
                 "started_at": row["started_at"],
                 "completed_at": row["completed_at"],
                 "method": row["method"],
                 "host": row["host"],
+                **provider,
                 "route": row["route"],
                 "success": bool(row["success"]),
                 "latency_ms": int(row["latency_ms"]),
@@ -212,14 +224,15 @@ class StatsStore:
                 "client_process": row["client_process"] or "",
                 "client_exe": row["client_exe"] or "",
                 "client_label": row["client_label"] or "Unknown",
+                "client_evidence": row["client_evidence"] or "",
+                "client_chain": row["client_chain"] or "",
                 "slow": (
                     row["connect_latency_ms"] is not None
                     and int(row["connect_latency_ms"]) >= SLOW_REQUEST_THRESHOLD_MS
                 ),
                 "error": row["error"],
-            }
-            for row in rows
-        ]
+            })
+        return requests
 
     def get_whitelist_candidates(self, limit=10, since=None):
         limit = max(1, min(int(limit), 50))
@@ -935,19 +948,26 @@ class StatsStore:
         """
         sql_process = "SELECT client_process, COUNT(*) AS count FROM proxy_requests"
         sql_host = "SELECT host, COUNT(*) AS count FROM proxy_requests"
+        sql_claude_host = (
+            "SELECT host, COUNT(*) AS count FROM proxy_requests "
+            "WHERE COALESCE(NULLIF(client_label, ''), 'Unknown') = 'Claude Code'"
+        )
 
         params = []
         if since_iso:
             sql_process += " WHERE started_at >= ?"
             sql_host += " WHERE started_at >= ?"
+            sql_claude_host += " AND started_at >= ?"
             params.append(self._indexed_time_value(since_iso))
 
         sql_process += " GROUP BY client_process ORDER BY count DESC"
         sql_host += " GROUP BY host ORDER BY count DESC"
+        sql_claude_host += " GROUP BY host ORDER BY count DESC"
 
         with self._connection() as conn:
             process_rows = conn.execute(sql_process, params).fetchall()
             host_rows = conn.execute(sql_host, params).fetchall()
+            claude_host_rows = conn.execute(sql_claude_host, params).fetchall()
 
         software_ranking = []
         for row in process_rows:
@@ -967,10 +987,82 @@ class StatsStore:
                 "count": cnt
             })
 
+        claude_code_host_ranking = []
+        for row in claude_host_rows:
+            h = row["host"] if isinstance(row, sqlite3.Row) else row[0]
+            cnt = row["count"] if isinstance(row, sqlite3.Row) else row[1]
+            claude_code_host_ranking.append({
+                "host": h or "unknown",
+                "count": cnt
+            })
+
         return {
             "software": software_ranking,
-            "host": host_ranking
+            "host": host_ranking,
+            "claude_code_host": claude_code_host_ranking,
+            "claude_code_activity": self.get_claude_code_activity(since_iso),
         }
+
+    def get_claude_code_activity(self, since_iso=None, limit=1000):
+        limit = max(1, min(int(limit), 5000))
+        where = "WHERE COALESCE(NULLIF(client_label, ''), 'Unknown') = 'Claude Code'"
+        params = []
+        if since_iso:
+            where += " AND started_at >= ?"
+            params.append(self._indexed_time_value(since_iso))
+        params.append(limit)
+
+        with self._connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT
+                    started_at,
+                    host,
+                    success,
+                    connect_latency_ms,
+                    duration_ms,
+                    stage,
+                    error,
+                    client_pid,
+                    client_process,
+                    client_evidence,
+                    client_chain
+                FROM proxy_requests
+                {where}
+                ORDER BY started_at DESC, id DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+
+        activity = []
+        for row in rows:
+            provider = classify_provider(row["host"])
+            activity.append(
+                {
+                    "started_at": row["started_at"],
+                    "host": row["host"] or UNKNOWN_HOST,
+                    "success": bool(row["success"]),
+                    "connect_latency_ms": (
+                        int(row["connect_latency_ms"])
+                        if row["connect_latency_ms"] is not None
+                        else None
+                    ),
+                    "duration_ms": int(row["duration_ms"] or 0),
+                    "stage": row["stage"] or "completed",
+                    "error": row["error"] or "",
+                    "client_pid": (
+                        int(row["client_pid"])
+                        if row["client_pid"] is not None
+                        else None
+                    ),
+                    "client_process": row["client_process"] or "",
+                    "client_evidence": row["client_evidence"] or "",
+                    "client_chain": row["client_chain"] or "",
+                    **provider,
+                }
+            )
+        return activity
 
     def _count_proxy_requests(self, conn):
         row = conn.execute("SELECT COUNT(*) AS count FROM proxy_requests").fetchone()
@@ -1016,6 +1108,8 @@ class StatsStore:
                         client_process TEXT,
                         client_exe TEXT,
                         client_label TEXT,
+                        client_evidence TEXT,
+                        client_chain TEXT,
                         error TEXT
                     )
                     """
@@ -1104,6 +1198,10 @@ class StatsStore:
             conn.execute("ALTER TABLE proxy_requests ADD COLUMN client_exe TEXT")
         if "client_label" not in columns:
             conn.execute("ALTER TABLE proxy_requests ADD COLUMN client_label TEXT")
+        if "client_evidence" not in columns:
+            conn.execute("ALTER TABLE proxy_requests ADD COLUMN client_evidence TEXT")
+        if "client_chain" not in columns:
+            conn.execute("ALTER TABLE proxy_requests ADD COLUMN client_chain TEXT")
 
     def _connect_latency_expr(self):
         return (

@@ -56,9 +56,11 @@
               <div class="health-subtitle" id="systemHealthSub">代理、Dashboard 与上游连接均处于可用状态。</div>
             </div>
           </div>
-          <button class="health-link" type="button" data-tab-target="doctor">查看详情</button>
-          <div class="alert-list" id="alertsList" hidden></div>
-          <div class="alert-count" id="alertCount" hidden>0 条</div>
+          <div class="health-banner-actions">
+            <div class="alert-count" id="alertCount">无告警</div>
+            <button class="health-link" type="button" data-tab-target="doctor">查看详情</button>
+            <div class="alert-list" id="alertsList" hidden></div>
+          </div>
         </section>
 
         <section class="grid layout-widget" data-widget="kpis">
@@ -193,6 +195,18 @@
 
     <section class="tab-panel" data-tab-panel="analytics">
       <section class="details">
+        <div class="table claude-code-panel">
+          <div class="table-head">
+            <div>
+              <h2>Claude Code CLI 识别面板</h2>
+              <p class="panel-intro">进程链、服务商识别、异常和边界说明</p>
+            </div>
+          </div>
+          <div class="claude-code-grid" id="claudeCodePanel">
+            <div class="table-empty">正在加载 Claude Code CLI 流量...</div>
+          </div>
+        </div>
+
         <div class="table">
           <div class="table-head">
             <div>
