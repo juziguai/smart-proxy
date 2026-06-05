@@ -1,19 +1,25 @@
 import asyncio
 
-from .claude_usage_reader import ClaudeUsageReader
+from .mitm_usage_reader import MitmUsageReader
 
 
-def ingest_usage_events(reader, stats_store):
+def ingest_usage_events(reader, stats_store, extra_readers=None):
     events = reader.read_usage_events()
+    for extra_reader in extra_readers or []:
+        events.extend(extra_reader.read_usage_events())
     stats_store.upsert_usage_events(events)
     return len(events)
 
 
 async def run_usage_ingestion_loop(stats_store, interval_sec=5, reader=None, log=None):
-    reader = reader or ClaudeUsageReader()
+    reader = reader or MitmUsageReader()
     while True:
         try:
-            await asyncio.to_thread(ingest_usage_events, reader, stats_store)
+            await asyncio.to_thread(
+                ingest_usage_events,
+                reader,
+                stats_store,
+            )
         except Exception as exc:
             if log:
                 log(f"usage ingestion failed: {exc}")

@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.6.0
+
+真实 Token 统计与请求来源追溯闭环：
+
+- 新增可选 MITM Token Capture sidecar，使用 `start-mitm-token-capture.ps1` 启动 `127.0.0.1:8891`，仅捕获模型 API 响应中的 `usage` 字段。
+- Dashboard “今日 Token”切换为 `token-capture-*.jsonl` 数据源，旧 Claude transcript 读取器仅保留兼容，不再参与默认统计。
+- Claude 启动脚本模板新增 MITM 偏好记忆，支持启用并记住、本次启用、本次不启用、不启用并记住，以及 `CLAUDE_MITM_TOKEN_CAPTURE=1/0/ask` 覆盖。
+- Profiler 与请求统计补充 User-Agent、源端口、PID、进程链和 evidence，便于定位浏览器、Claude Code CLI、Codex、Cockpit Tools 等来源。
+- 流量分析页补充来源筛选、异常请求提示、峰值连接数和更紧凑的 Claude Code 面板布局。
+- Doctor 改为检查 MITM Token Capture 文件状态，并继续展示数据库、资源、上游代理和网络连通性诊断。
+
 ## v0.5.0
 
 Claude Code CLI 流量识别和服务商归因增强：

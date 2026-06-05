@@ -8,6 +8,7 @@ $PYTHON_PATH         = "<Python路径>\python.exe"
 $SMART_PROXY_DIR     = "<smart-proxy项目目录>"
 $LOCALMEMORY_MCP_CMD = "<LocalMemory MCP cmd路径>"
 $CLAUDE_SLIM_MCP_CONFIG = Join-Path $env:USERPROFILE ".claude\mcp-slim.json"
+$CLAUDE_MITM_TOKEN_CAPTURE_PREF = Join-Path $env:USERPROFILE ".smart-proxy\claude-mitm-token-capture.pref"
 # =====================
 
 $earlySmartProxyServiceStatusArgs = @("-sps", "--sps", "-proxy-status", "--proxy-status", "-smart-proxy-status", "--smart-proxy-status")
@@ -129,6 +130,220 @@ function Wait-StatsDashboard {
     return $false
 }
 
+function Test-MitmTokenCapture {
+    param(
+        [int]$Port = 8891
+    )
+
+    return [bool](Get-NetTCPConnection -LocalAddress "127.0.0.1" -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
+}
+
+function Set-ClaudeStandardProxy {
+    $proxyUrl = "http://127.0.0.1:8889"
+    $env:HTTP_PROXY = $proxyUrl
+    $env:HTTPS_PROXY = $proxyUrl
+    $env:ALL_PROXY = $proxyUrl
+    $env:http_proxy = $proxyUrl
+    $env:https_proxy = $proxyUrl
+    $env:all_proxy = $proxyUrl
+    $env:NO_PROXY = "127.0.0.1,localhost"
+    $env:no_proxy = "127.0.0.1,localhost"
+}
+
+function Ensure-MitmTokenCapture {
+    param(
+        [int]$Port = 8891
+    )
+
+    if (Test-MitmTokenCapture -Port $Port) {
+        Write-Host "[mitm-token] 已运行: http://127.0.0.1:$Port" -ForegroundColor Green
+        return $true
+    }
+
+    $scriptPath = Join-Path $SMART_PROXY_DIR "start-mitm-token-capture.ps1"
+    if (-not (Test-Path -LiteralPath $scriptPath)) {
+        Write-Host "[mitm-token] 未找到启动脚本: $scriptPath" -ForegroundColor Red
+        return $false
+    }
+
+    Write-Host "[mitm-token] 启动 token capture sidecar..." -ForegroundColor Yellow
+    & $scriptPath -Port $Port -Background
+    Start-Sleep -Seconds 3
+    if (Test-MitmTokenCapture -Port $Port) {
+        Write-Host "[mitm-token] -> http://127.0.0.1:$Port" -ForegroundColor Green
+        return $true
+    }
+
+    Write-Host "[mitm-token] sidecar 未监听 127.0.0.1:$Port，请查看 logs\mitm-token-capture.err.log" -ForegroundColor Red
+    return $false
+}
+
+function Enable-ClaudeMitmTokenCapture {
+    param(
+        [int]$Port = 8891
+    )
+
+    if (-not (Ensure-MitmTokenCapture -Port $Port)) {
+        return $false
+    }
+
+    $caPem = Join-Path $env:USERPROFILE ".mitmproxy\mitmproxy-ca-cert.pem"
+    $caCer = Join-Path $env:USERPROFILE ".mitmproxy\mitmproxy-ca-cert.cer"
+    if (-not (Test-Path -LiteralPath $caPem)) {
+        Write-Host "[mitm-token] 未找到 mitmproxy CA PEM: $caPem" -ForegroundColor Red
+        Write-Host "[mitm-token] 可先运行一次 mitmdump 生成证书。" -ForegroundColor Yellow
+        return $false
+    }
+
+    $proxyUrl = "http://127.0.0.1:$Port"
+    $env:HTTP_PROXY = $proxyUrl
+    $env:HTTPS_PROXY = $proxyUrl
+    $env:ALL_PROXY = $proxyUrl
+    $env:http_proxy = $proxyUrl
+    $env:https_proxy = $proxyUrl
+    $env:all_proxy = $proxyUrl
+    $env:NODE_EXTRA_CA_CERTS = $caPem
+    $env:SSL_CERT_FILE = $caPem
+    $env:REQUESTS_CA_BUNDLE = $caPem
+    $env:NO_PROXY = "127.0.0.1,localhost"
+    $env:no_proxy = "127.0.0.1,localhost"
+
+    Write-Host "[mitm-token] Claude Code 本次会话将走 MITM 代理: $proxyUrl" -ForegroundColor Green
+    Write-Host "[mitm-token] CA PEM: $caPem" -ForegroundColor DarkGray
+    Write-Host "[mitm-token] Windows CA: $caCer" -ForegroundColor DarkGray
+    Write-Host "[mitm-token] 捕获文件: $SMART_PROXY_DIR\logs\token-capture-$(Get-Date -Format yyyy-MM-dd).jsonl" -ForegroundColor DarkGray
+    return $true
+}
+
+function Normalize-ClaudeMitmTokenCapturePreference {
+    param(
+        [string]$Value
+    )
+
+    if (-not $Value) {
+        return ""
+    }
+
+    switch -Regex ($Value.Trim().ToLowerInvariant()) {
+        "^(1|true|yes|y|on|enable|enabled)$" { return "enable" }
+        "^(0|false|no|n|off|disable|disabled)$" { return "disable" }
+        "^(ask|prompt)$" { return "ask" }
+        default { return "" }
+    }
+}
+
+function Get-ClaudeMitmTokenCapturePreference {
+    if (-not (Test-Path -LiteralPath $CLAUDE_MITM_TOKEN_CAPTURE_PREF)) {
+        return ""
+    }
+
+    try {
+        $raw = [System.IO.File]::ReadAllText($CLAUDE_MITM_TOKEN_CAPTURE_PREF, [System.Text.Encoding]::UTF8)
+        return (Normalize-ClaudeMitmTokenCapturePreference -Value $raw)
+    }
+    catch {
+        return ""
+    }
+}
+
+function Set-ClaudeMitmTokenCapturePreference {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet("enable", "disable", "ask")]
+        [string]$Preference
+    )
+
+    $prefDir = Split-Path -Parent $CLAUDE_MITM_TOKEN_CAPTURE_PREF
+    New-Item -ItemType Directory -Force -Path $prefDir | Out-Null
+
+    if ($Preference -eq "ask") {
+        Remove-Item -LiteralPath $CLAUDE_MITM_TOKEN_CAPTURE_PREF -Force -ErrorAction SilentlyContinue
+        Write-Host "[mitm-token] 已恢复为下次启动询问。" -ForegroundColor Green
+        return
+    }
+
+    [System.IO.File]::WriteAllText(
+        $CLAUDE_MITM_TOKEN_CAPTURE_PREF,
+        $Preference,
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    $label = if ($Preference -eq "enable") { "启用" } else { "不启用" }
+    Write-Host "[mitm-token] 已记住偏好: $label" -ForegroundColor Green
+}
+
+function Read-ClaudeMitmTokenCapturePreference {
+    Write-Host ""
+    Write-Host "=== Claude Code MITM Token Capture ===" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "  [1] 启用并记住      (默认)"
+    Write-Host "  [2] 仅本次启用"
+    Write-Host "  [3] 本次不启用"
+    Write-Host "  [4] 不启用并记住"
+    Write-Host ""
+
+    $choice = Read-Host "输入序号 (1/2/3/4，默认 1)"
+    switch ($choice) {
+        "2" { return "enable-once" }
+        "3" { return "disable-once" }
+        "4" {
+            Set-ClaudeMitmTokenCapturePreference -Preference "disable"
+            return "disable"
+        }
+        default {
+            Set-ClaudeMitmTokenCapturePreference -Preference "enable"
+            return "enable"
+        }
+    }
+}
+
+function Resolve-ClaudeMitmTokenCaptureMode {
+    $override = Normalize-ClaudeMitmTokenCapturePreference -Value $env:CLAUDE_MITM_TOKEN_CAPTURE
+    if ($override -eq "enable") {
+        Write-Host "[mitm-token] 环境变量覆盖: 启用 (CLAUDE_MITM_TOKEN_CAPTURE=1)" -ForegroundColor DarkGray
+        return "enable-once"
+    }
+    if ($override -eq "disable") {
+        Write-Host "[mitm-token] 环境变量覆盖: 不启用 (CLAUDE_MITM_TOKEN_CAPTURE=0)" -ForegroundColor DarkGray
+        return "disable-once"
+    }
+    if ($override -eq "ask") {
+        Write-Host "[mitm-token] 环境变量覆盖: 本次询问 (CLAUDE_MITM_TOKEN_CAPTURE=ask)" -ForegroundColor DarkGray
+        return (Read-ClaudeMitmTokenCapturePreference)
+    }
+
+    $saved = Get-ClaudeMitmTokenCapturePreference
+    if ($saved -eq "enable") {
+        Write-Host "[mitm-token] 当前偏好: 启用，自动启用 Token Capture。" -ForegroundColor DarkGray
+        return "enable"
+    }
+    if ($saved -eq "disable") {
+        Write-Host "[mitm-token] 当前偏好: 不启用，Claude Code 使用普通代理。" -ForegroundColor DarkGray
+        return "disable"
+    }
+
+    return (Read-ClaudeMitmTokenCapturePreference)
+}
+
+function Use-ClaudeMitmTokenCapturePreference {
+    param(
+        [int]$Port = 8891
+    )
+
+    $mode = Resolve-ClaudeMitmTokenCaptureMode
+    if ($mode -like "enable*") {
+        if (-not (Enable-ClaudeMitmTokenCapture -Port $Port)) {
+            Write-Host "[mitm-token] 启用失败，已保留原代理 127.0.0.1:8889。" -ForegroundColor Yellow
+            Set-ClaudeStandardProxy
+            return $false
+        }
+        return $true
+    }
+
+    Set-ClaudeStandardProxy
+    Write-Host "[mitm-token] 本次未启用，Claude Code 继续使用普通代理 127.0.0.1:8889。" -ForegroundColor DarkGray
+    return $false
+}
+
 function Open-ManagementPagesInChrome {
     $urls = @(
         "http://127.0.0.1:8890"
@@ -197,8 +412,7 @@ if (-not $dashboardReady) {
     exit 1
 }
 
-$env:HTTP_PROXY  = "http://127.0.0.1:8889"
-$env:HTTPS_PROXY = "http://127.0.0.1:8889"
+Set-ClaudeStandardProxy
 Write-Host "[proxy] -> 127.0.0.1:8889 (auto-detect)" -ForegroundColor Green
 Write-Host "[stats] -> http://127.0.0.1:8890" -ForegroundColor Green
 # Auto-open of management pages is currently disabled.
@@ -404,15 +618,27 @@ function Show-SmartProxyServiceMenu {
     Write-Host "  [1] 查看服务状态"
     Write-Host "  [2] 重启服务"
     Write-Host "  [3] 安装/修复并启动服务"
+    Write-Host "  [4] MITM Token Capture: 启用并记住"
+    Write-Host "  [5] MITM Token Capture: 不启用并记住"
+    Write-Host "  [6] MITM Token Capture: 下次启动询问"
     Write-Host ""
 
-    $serviceChoice = Read-Host "输入序号 (1/2/3，默认 1)"
+    $serviceChoice = Read-Host "输入序号 (1/2/3/4/5/6，默认 1)"
     switch ($serviceChoice) {
         "2" {
             Invoke-SmartProxyServiceTool -Action "Restart" | Out-Null
         }
         "3" {
             Invoke-SmartProxyServiceTool -Action "Install" | Out-Null
+        }
+        "4" {
+            Set-ClaudeMitmTokenCapturePreference -Preference "enable"
+        }
+        "5" {
+            Set-ClaudeMitmTokenCapturePreference -Preference "disable"
+        }
+        "6" {
+            Set-ClaudeMitmTokenCapturePreference -Preference "ask"
         }
         default {
             Invoke-SmartProxyServiceTool -Action "Status" | Out-Null
@@ -497,6 +723,7 @@ if (-not $providers.ContainsKey($modelChoice)) {
     $modelChoice = "1"
 }
 Set-ModelProvider $providers[$modelChoice]
+Use-ClaudeMitmTokenCapturePreference -Port 8891 | Out-Null
 $mcpArgs = Get-ClaudeMcpArgs
 
 Write-Host "=== 选择启动模式 ===" -ForegroundColor Cyan

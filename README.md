@@ -2,7 +2,7 @@
 
 Windows 本地智能代理 sidecar。
 
-当前版本：`v0.5.0`
+当前版本：`v0.6.0`
 
 它固定监听 `127.0.0.1:8889`，由 Claude Code、Antigravity、Cockpit Tools 等客户端连接；请求进来后，smart-proxy 会按当前 Windows 系统代理状态、白名单和本地规则决定直连还是转发到上游代理。
 
@@ -10,12 +10,12 @@ Windows 本地智能代理 sidecar。
 
 ## 更新摘要
 
-`v0.5.0` 聚焦 Claude Code CLI 流量识别和服务商归因：
+`v0.6.0` 聚焦真实 Token 统计与请求来源追溯闭环：
 
-- Claude Code CLI 增加进程链识别和证据展示，可区分 `bun/node/cli.cjs` 与普通脚本流量。
-- 服务商识别抽出为 `provider-rules.json` 规则体系，支持 MiMo、DeepSeek、MiniMax、Anthropic、OpenAI、Google 等模型服务商。
-- 流量分析页新增 Claude Code 专属面板，展示进程拓扑、服务商占比、错误、未知 Host 建议和能力边界。
-- 统计口径过滤无 Host 断连噪声，避免 `(unknown)` 污染服务商占比和失败率。
+- 新增可选 MITM Token Capture，捕获模型 API 响应中的 `usage` 字段，作为 Dashboard “今日 Token”的默认数据源。
+- Claude 启动脚本支持首次确认并记住 MITM 偏好，日常启动自动复用 `127.0.0.1:8891`，也可用环境变量临时覆盖。
+- 请求来源追溯补充 User-Agent、源端口、PID、进程链和 evidence，Profiler 与 Dashboard 均可查看。
+- Doctor 改为展示 MITM Token Capture 状态，流量分析页补充来源筛选、异常告警和更清晰的能力边界说明。
 
 完整版本历史见 [CHANGELOG.md](CHANGELOG.md)。
 
@@ -23,10 +23,10 @@ Windows 本地智能代理 sidecar。
 
 - 自动读取 Windows 系统代理，运行中切换代理也能生效。
 - 支持 `whitelist.txt`，命中域名直接连接，减少不必要代理绕路。
-- 不解密 HTTPS，不读取 API key，只做 CONNECT/HTTP 透明转发。
-- 记录本地连接统计、Host 状态、客户端来源和 Claude transcript 用量。
+- 默认代理路径不解密 HTTPS，不读取 API key，只做 CONNECT/HTTP 透明转发；可选 MITM Token Capture 仅用于解密指定模型 API 的 usage 字段。
+- 记录本地连接统计、Host 状态、客户端来源和 MITM Token Capture 用量。
 - 内置本地 Dashboard、流量分析和 Doctor 诊断页。
-- 纯 Python 标准库实现，无第三方运行依赖。
+- 核心代理为 Python 标准库实现；可选 MITM Token Capture 依赖本机 mitmproxy。
 
 ## 快速开始
 
@@ -123,7 +123,7 @@ http://127.0.0.1:8890
 - 查看请求数、成功率、延迟、错误和最近请求。
 - 按 Host、客户端、模型查看统计。
 - 按软件进程和模型厂商查看流量占比。
-- 查看 Claude transcript 中的 token 用量和预估费用。
+- 查看 MITM Token Capture 捕获到的 token 用量和预估费用。
 - 编辑本地白名单。
 - 运行 Doctor 诊断。
 
@@ -143,6 +143,7 @@ smart-proxy/
 ├── install-smart-proxy-service.ps1    # 安装和管理 Windows Service
 ├── install-smart-proxy-watchdog.ps1   # 安装 watchdog 守护脚本
 ├── smart-proxy-watchdog.ps1           # 本地常驻守护脚本
+├── start-mitm-token-capture.ps1       # 启动 MITM token 捕获 sidecar
 ├── start-proxy.vbs                    # Windows 无窗口启动入口
 │
 ├── smart_proxy/                       # 核心 Python 包
@@ -153,8 +154,12 @@ smart-proxy/
 │   ├── whitelist.py                   # 白名单加载、匹配、保存
 │   ├── stats_store.py                 # SQLite 统计数据层
 │   ├── stats_server.py                # Dashboard API 服务
-│   ├── claude_usage_reader.py         # Claude transcript 用量读取
-│   ├── usage_ingestion.py             # 用量后台导入
+│   ├── token_capture.py               # 解密响应中的 usage 字段解析
+│   ├── mitm_token_capture_addon.py    # mitmproxy token 捕获插件
+│   ├── mitm_usage_reader.py           # token-capture JSONL 用量读取
+│   ├── usage_events.py                # 用量事件数据结构
+│   ├── claude_usage_reader.py         # 旧 Claude transcript 读取器，保留兼容
+│   ├── usage_ingestion.py             # MITM 用量后台导入
 │   └── pricing.py                     # 模型费用估算
 │
 ├── web/                               # Dashboard 前端静态资源

@@ -63,56 +63,72 @@
           </div>
         </section>
 
-        <section class="grid layout-widget" data-widget="kpis">
+        <section class="grid kpi-grid layout-widget" data-widget="kpis">
           <button class="drag-handle" type="button" aria-label="拖动指标卡片">拖动</button>
-          <article class="card metric-card" style="--accent: var(--blue)">
-            <div class="metric-icon" aria-hidden="true">↗</div>
-            <div>
-              <div class="label">总请求数</div>
-              <div class="value" id="totalRequests">0</div>
-              <div class="sub" id="requestSub">等待对比 · 成功 0 / 失败 0</div>
+          <article class="card metric-card kpi-card" data-kpi-card style="--accent: var(--blue)">
+            <div class="metric-icon kpi-card__icon" aria-hidden="true">↗</div>
+            <div class="metric-body kpi-card__body">
+              <div class="label kpi-card__label">总请求数</div>
+              <div class="value kpi-card__value" id="totalRequests">0</div>
+              <div class="sub kpi-card__sub" id="requestSub">等待对比 · 成功 0 / 失败 0</div>
             </div>
           </article>
-          <article class="card metric-card" style="--accent: var(--green)">
-            <div class="metric-icon" aria-hidden="true">%</div>
-            <div>
-              <div class="label">成功率</div>
-              <div class="value" id="successRateKpi">0%</div>
-              <div class="sub" id="successRate">等待对比 · 持续 0ms</div>
+          <article class="card metric-card kpi-card" data-kpi-card style="--accent: var(--green)">
+            <div class="metric-icon kpi-card__icon" aria-hidden="true">%</div>
+            <div class="metric-body kpi-card__body">
+              <div class="label kpi-card__label">成功率</div>
+              <div class="value kpi-card__value" id="successRateKpi">0%</div>
+              <div class="sub kpi-card__sub" id="successRate">等待对比 · 持续 0ms</div>
             </div>
           </article>
-          <article class="card metric-card" style="--accent: var(--orange)">
-            <div class="metric-icon" aria-hidden="true">⏱</div>
-            <div>
-              <div class="label">平均建连(P50)</div>
-              <div class="value" id="avgLatency">0ms</div>
-              <div class="sub" id="latencySub">等待对比 · 慢建连 0</div>
+          <article class="card metric-card kpi-card" data-kpi-card style="--accent: var(--orange)">
+            <div class="metric-icon kpi-card__icon" aria-hidden="true">⏱</div>
+            <div class="metric-body kpi-card__body">
+              <div class="label kpi-card__label">平均建连</div>
+              <div class="value kpi-card__value" id="avgLatency">0ms</div>
+              <div class="sub kpi-card__sub" id="latencySub">等待对比 · 慢建连 0</div>
             </div>
           </article>
-          <article class="card metric-card" style="--accent: var(--red)">
-            <div class="metric-icon" aria-hidden="true">¥</div>
-            <div>
-              <div class="label">今日费用</div>
-              <div class="value" id="estimatedCost">¥0</div>
-              <div class="sub" id="costSub">等待对比 · API 0 / 套餐 0</div>
+          <article class="card metric-card kpi-card" data-kpi-card style="--accent: var(--red)">
+            <div class="metric-icon kpi-card__icon" aria-hidden="true">¥</div>
+            <div class="metric-body kpi-card__body">
+              <div class="label kpi-card__label">今日费用</div>
+              <div class="value kpi-card__value" id="estimatedCost">¥0</div>
+              <div class="sub kpi-card__sub" id="costSub">等待对比 · API 0 / 套餐 0</div>
             </div>
           </article>
-          <article class="card metric-card" style="--accent: var(--violet)">
-            <div class="metric-icon" aria-hidden="true">T</div>
-            <div>
-              <div class="label">今日 Token</div>
-              <div class="value" id="totalTokens">0</div>
-              <div class="sub" id="tokenSub">等待对比 · 输入 0 / 输出 0</div>
+          <article class="card metric-card kpi-card" data-kpi-card style="--accent: var(--violet)">
+            <div class="metric-icon kpi-card__icon" aria-hidden="true">T</div>
+            <div class="metric-body kpi-card__body">
+              <div class="label kpi-card__label" title="来自 MITM token capture 解密后的模型 API usage 字段">今日 Token</div>
+              <div class="value kpi-card__value" id="totalTokens">0</div>
+              <div class="sub kpi-card__sub" id="tokenSub">等待对比 · 输入 0 / 输出 0</div>
             </div>
             <div id="cacheTokens" hidden>0</div>
             <div id="cacheSub" hidden>读 0 / 写 0</div>
           </article>
-          <article class="card metric-card" style="--accent: #7c3aed">
-            <div class="metric-icon" aria-hidden="true">🚫</div>
-            <div>
-              <div class="label">已屏蔽</div>
-              <div class="value" id="blockedRequests">0</div>
-              <div class="sub" id="blockedSub">今日遥测域名快速拒绝</div>
+          <article class="card metric-card kpi-card" data-kpi-card style="--accent: #7c3aed">
+            <div class="metric-icon kpi-card__icon" aria-hidden="true">🚫</div>
+            <div class="metric-body kpi-card__body">
+              <div class="label kpi-card__label">已屏蔽</div>
+              <div class="value kpi-card__value" id="blockedRequests">0</div>
+              <div class="sub kpi-card__sub" id="blockedSub">今日遥测域名快速拒绝</div>
+            </div>
+          </article>
+          <article class="card metric-card kpi-card" data-kpi-card style="--accent: #0f766e">
+            <div class="metric-icon kpi-card__icon" aria-hidden="true">↔</div>
+            <div class="metric-body kpi-card__body">
+              <div class="label kpi-card__label">峰值连接</div>
+              <div class="value kpi-card__value" id="peakConnections">0</div>
+              <div class="sub kpi-card__sub" id="peakConnectionsSub">当前 0 · 日期 -</div>
+            </div>
+          </article>
+          <article class="card metric-card kpi-card" data-kpi-card style="--accent: #d97706">
+            <div class="metric-icon kpi-card__icon" aria-hidden="true">!</div>
+            <div class="metric-body kpi-card__body">
+              <div class="label kpi-card__label">异常请求</div>
+              <div class="value kpi-card__value" id="anomalyRequests">0</div>
+              <div class="sub kpi-card__sub" id="anomalyRequestsSub">失败 0 / 慢建连 0</div>
             </div>
           </article>
         </section>
@@ -123,7 +139,7 @@
             <div class="trend-head">
               <div>
                 <h2>请求趋势</h2>
-                <p>按时间查看请求量、Token 与费用变化</p>
+                <p>按时间查看请求量、今日 Token 与费用变化</p>
               </div>
               <div class="trend-actions">
                 <select class="time-window" id="timeWindow" aria-label="趋势时间窗口">
@@ -139,7 +155,7 @@
                   <button data-range="all">全</button>
                 </div>
                 <div class="legend">
-                  <span style="--dot: var(--green)">Token</span>
+                  <span style="--dot: var(--green)">今日 Token</span>
                   <span style="--dot: var(--red)">费用</span>
                 </div>
               </div>
@@ -279,7 +295,12 @@
     <section class="tab-panel" data-tab-panel="requests">
       <section class="details">
         <div class="table">
-          <h2>Client breakdown</h2>
+          <div class="table-head">
+            <h2>请求来源</h2>
+            <select class="source-filter" id="requestSourceFilter" aria-label="按请求来源筛选">
+              <option value="">全部来源</option>
+            </select>
+          </div>
           <div id="clientBreakdown"></div>
         </div>
         <div class="table">

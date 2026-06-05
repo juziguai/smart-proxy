@@ -4,6 +4,7 @@ from datetime import datetime, time as datetime_time, timedelta, timezone
 from pathlib import Path
 import sqlite3
 
+from .config import DEFAULT_CONFIG
 from .pricing import aggregate_cost, estimate_usage_cost
 from .provider_classifier import classify_provider
 
@@ -56,11 +57,26 @@ class ProxyRequestEvent:
     client_label: str = ""
     client_evidence: str = ""
     client_chain: str = ""
+    user_agent: str = ""
+
+
+def _normalize_disabled_hosts(hosts):
+    normalized = []
+    for host in hosts or []:
+        text = str(host).strip().lower()
+        if text:
+            normalized.append(text)
+    return tuple(dict.fromkeys(normalized))
 
 
 class StatsStore:
-    def __init__(self, db_path):
+    def __init__(self, db_path, disabled_service_hosts=None):
         self._db_path = Path(db_path)
+        self._disabled_service_hosts = _normalize_disabled_hosts(
+            DEFAULT_CONFIG.disabled_service_hosts
+            if disabled_service_hosts is None
+            else disabled_service_hosts
+        )
         self._init_schema()
 
     def record_proxy_request(self, event: ProxyRequestEvent):
@@ -100,9 +116,10 @@ class StatsStore:
                         client_label,
                         client_evidence,
                         client_chain,
+                        user_agent,
                         error
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         event.started_at,
@@ -126,6 +143,7 @@ class StatsStore:
                         event.client_label,
                         event.client_evidence,
                         event.client_chain,
+                        event.user_agent,
                         event.error,
                     ),
                 )
@@ -137,13 +155,32 @@ class StatsStore:
         comparison = self._get_summary_comparison(range_name, now, since)
         return {"proxy": proxy, "usage": usage, "comparison": comparison}
 
-    def get_recent_proxy_requests(self, limit=50, since=None):
+    def get_recent_proxy_requests(self, limit=50, since=None, source=None):
         limit = max(1, min(int(limit), 200))
-        where = ""
+        alertable_request_expr = self._alertable_request_expr()
+        where_parts = []
         params = []
         if since:
-            where = "WHERE started_at >= ?"
+            where_parts.append("started_at >= ?")
             params.append(self._indexed_time_value(since))
+        source = (source or "").strip().lower()
+        if source:
+            source_expr = """
+                LOWER(
+                    COALESCE(NULLIF(client_label, ''), 'Unknown')
+                    || ' / '
+                    || COALESCE(NULLIF(client_process, ''), 'unknown')
+                )
+            """
+            where_parts.append(
+                f"""(
+                    LOWER(COALESCE(NULLIF(client_label, ''), 'Unknown')) = ?
+                    OR LOWER(COALESCE(NULLIF(client_process, ''), 'unknown')) = ?
+                    OR {source_expr} = ?
+                )"""
+            )
+            params.extend([source, source, source])
+        where = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
         params.append(limit)
 
         with self._connection() as conn:
@@ -171,7 +208,9 @@ class StatsStore:
                     client_label,
                     client_evidence,
                     client_chain,
-                    error
+                    user_agent,
+                    error,
+                    ({alertable_request_expr}) AS alertable
                 FROM proxy_requests
                 {where}
                 ORDER BY started_at DESC, id DESC
@@ -226,10 +265,14 @@ class StatsStore:
                 "client_label": row["client_label"] or "Unknown",
                 "client_evidence": row["client_evidence"] or "",
                 "client_chain": row["client_chain"] or "",
+                "user_agent": row["user_agent"] or "",
                 "slow": (
+                    bool(row["alertable"])
+                    and
                     row["connect_latency_ms"] is not None
                     and int(row["connect_latency_ms"]) >= SLOW_REQUEST_THRESHOLD_MS
                 ),
+                "alertable": bool(row["alertable"]),
                 "error": row["error"],
             })
         return requests
@@ -285,6 +328,7 @@ class StatsStore:
         interval = "hour" if range_name == "day" else "day"
         buckets = {}
         models = [model for model in (models or []) if model]
+        alertable_request_expr = self._alertable_request_expr()
 
         with self._connection() as conn:
             proxy_rows = conn.execute(
@@ -293,6 +337,7 @@ class StatsStore:
                     SELECT
                         started_at,
                         success,
+                        ({alertable_request_expr}) AS alertable,
                         {self._connect_latency_expr()} AS connect_latency_ms,
                         COALESCE(duration_ms, latency_ms) AS duration_ms
                     FROM proxy_requests
@@ -306,6 +351,9 @@ class StatsStore:
             usage_rows = conn.execute(usage_sql, usage_params).fetchall()
 
         for row in proxy_rows:
+            is_meaningful = bool(row["success"]) or bool(row["alertable"])
+            if not is_meaningful:
+                continue
             bucket = self._bucket_key(row["started_at"], interval)
             item = self._trend_bucket(buckets, bucket)
             item["proxy_requests"] += 1
@@ -436,20 +484,24 @@ class StatsStore:
         connect_latency_expr = self._connect_latency_expr()
         duration_expr = "COALESCE(duration_ms, latency_ms)"
         alertable_request_expr = self._alertable_request_expr()
+        meaningful_request_expr = f"(success = 1 OR ({alertable_request_expr}))"
 
         with self._connection() as conn:
             row = conn.execute(
                 f"""
                 SELECT
-                    COUNT(*) AS total_requests,
-                    COALESCE(SUM(success), 0) AS successful_requests,
-                    COALESCE(SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END), 0)
+                    COALESCE(SUM(CASE WHEN {meaningful_request_expr} THEN 1 ELSE 0 END), 0)
+                        AS total_requests,
+                    COALESCE(SUM(CASE WHEN success = 1 AND {meaningful_request_expr} THEN 1 ELSE 0 END), 0)
+                        AS successful_requests,
+                    COALESCE(SUM(CASE WHEN success = 0 AND ({alertable_request_expr}) THEN 1 ELSE 0 END), 0)
                         AS failed_requests,
-                    COALESCE(AVG({connect_latency_expr}), 0)
+                    COALESCE(AVG(CASE WHEN {meaningful_request_expr} THEN {connect_latency_expr} END), 0)
                         AS average_connect_latency_ms,
-                    COALESCE(AVG({duration_expr}), 0) AS average_duration_ms
+                    COALESCE(AVG(CASE WHEN {meaningful_request_expr} THEN {duration_expr} END), 0)
+                        AS average_duration_ms
                 FROM proxy_requests
-                {where} {'AND' if where else 'WHERE'} route != 'blocked'
+                {where}
                 """,
                 params,
             ).fetchone()
@@ -478,7 +530,7 @@ class StatsStore:
                     route,
                     COUNT(*) AS total_requests,
                     COALESCE(SUM(success), 0) AS successful_requests,
-                    COALESCE(SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END), 0)
+                    COALESCE(SUM(CASE WHEN success = 0 AND ({alertable_request_expr}) THEN 1 ELSE 0 END), 0)
                         AS failed_requests,
                     COALESCE(SUM(CASE WHEN success = 0 AND error IS NOT NULL AND error <> '' AND ({alertable_request_expr}) THEN 1 ELSE 0 END), 0)
                         AS alert_failed_requests,
@@ -503,9 +555,9 @@ class StatsStore:
                     COALESCE(NULLIF(client_process, ''), 'unknown') AS client_process,
                     COUNT(*) AS total_requests,
                     COALESCE(SUM(success), 0) AS successful_requests,
-                    COALESCE(SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END), 0)
+                    COALESCE(SUM(CASE WHEN success = 0 AND ({alertable_request_expr}) THEN 1 ELSE 0 END), 0)
                         AS failed_requests,
-                    COALESCE(SUM(CASE WHEN {connect_latency_expr} >= ? THEN 1 ELSE 0 END), 0)
+                    COALESCE(SUM(CASE WHEN ({alertable_request_expr}) AND {connect_latency_expr} >= ? THEN 1 ELSE 0 END), 0)
                         AS slow_requests,
                     COALESCE(AVG({connect_latency_expr}), 0)
                         AS average_connect_latency_ms,
@@ -658,6 +710,20 @@ class StatsStore:
 
     def _build_proxy_alerts(self, hosts):
         alerts = []
+        for host in hosts:
+            if self._disabled_service_host_match(host["host"]):
+                alerts.append(
+                    {
+                        "severity": "warning",
+                        "kind": "disabled_service_host",
+                        "host": host["host"],
+                        "message": (
+                            f"disabled service host still has "
+                            f"{host['total_requests']} request(s)"
+                        ),
+                        "value": host["total_requests"],
+                    }
+                )
         for host in hosts[:10]:
             if (
                 host["alert_failed_requests"] > 0
@@ -695,6 +761,15 @@ class StatsStore:
                 )
         return alerts[:8]
 
+    def _disabled_service_host_match(self, host):
+        host = (host or "").lower()
+        if not host or not self._disabled_service_hosts:
+            return False
+        for pattern in self._disabled_service_hosts:
+            if host == pattern or host.endswith(f".{pattern}"):
+                return True
+        return False
+
     def _should_alert_slow_host(self, host):
         slow_requests = host["slow_requests"]
         if slow_requests <= 0:
@@ -720,7 +795,7 @@ class StatsStore:
         return "generic"
 
     def _get_usage_summary(self, since, until=None):
-        where, params = self._time_window_clause("timestamp", since, until)
+        where, params = self._usage_time_window_clause(since, until)
 
         with self._connection() as conn:
             row = conn.execute(
@@ -1110,6 +1185,7 @@ class StatsStore:
                         client_label TEXT,
                         client_evidence TEXT,
                         client_chain TEXT,
+                        user_agent TEXT,
                         error TEXT
                     )
                     """
@@ -1202,6 +1278,8 @@ class StatsStore:
             conn.execute("ALTER TABLE proxy_requests ADD COLUMN client_evidence TEXT")
         if "client_chain" not in columns:
             conn.execute("ALTER TABLE proxy_requests ADD COLUMN client_chain TEXT")
+        if "user_agent" not in columns:
+            conn.execute("ALTER TABLE proxy_requests ADD COLUMN user_agent TEXT")
 
     def _connect_latency_expr(self):
         return (
@@ -1215,7 +1293,7 @@ class StatsStore:
     def _alertable_request_expr(self):
         return (
             f"host <> '{UNKNOWN_HOST}' "
-            f"AND route <> '{UNPARSED_ROUTE}' "
+            f"AND route NOT IN ('{UNPARSED_ROUTE}', 'blocked') "
             "AND COALESCE(stage, 'completed') NOT IN "
             "('client_closed', 'read_timeout', 'parse_failed')"
         )
@@ -1268,8 +1346,8 @@ class StatsStore:
                 cache_creation_input_tokens
             FROM usage_events
         """
-        clauses = []
-        params = []
+        clauses = ["source_file LIKE ?"]
+        params = ["%token-capture-%"]
         if since:
             clauses.append("datetime(timestamp) >= datetime(?)")
             params.append(since)
@@ -1280,6 +1358,12 @@ class StatsStore:
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
         return sql, params
+
+    def _usage_time_window_clause(self, since, until=None):
+        where, params = self._time_window_clause("timestamp", since, until)
+        if where:
+            return f"{where} AND source_file LIKE ?", params + ["%token-capture-%"]
+        return "WHERE source_file LIKE ?", ["%token-capture-%"]
 
     def _bucket_key(self, value, interval):
         dt = parse_datetime(value)

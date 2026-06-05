@@ -1,6 +1,7 @@
     let currentRange = 'day';
     let analyticsLoaded = false;
     let analyticsRange = 'today';
+    let requestSourceFilterValue = '';
     const selectedModels = new Set();
     let layoutEditing = false;
     let draggedWidget = null;
@@ -25,6 +26,13 @@
     const unitFmt = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 });
     const moneyFmt = new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const text = (id, value) => { document.getElementById(id).textContent = value; };
+    const initMetricCardFlow = () => {
+      const cards = [...document.querySelectorAll('[data-widget="kpis"] [data-kpi-card]')];
+      cards.forEach((card, index) => {
+        card.style.setProperty('--metric-flow-count', cards.length);
+        card.style.setProperty('--metric-flow-index', index);
+      });
+    };
     const switchTab = target => {
       tabButtons.forEach(button => {
         const active = button.dataset.tabTarget === target;
@@ -275,9 +283,9 @@
     };
     const fitMetricValue = value => {
       const textValue = String(value);
-      if (textValue.length >= 10) return '24px';
-      if (textValue.length >= 8) return '26px';
-      if (textValue.length >= 7) return '28px';
+      if (textValue.length >= 10) return '1.5rem';
+      if (textValue.length >= 8) return '1.625rem';
+      if (textValue.length >= 7) return '1.75rem';
       return '';
     };
     const percent = value => `${Math.round(value * 100)}%`;
@@ -324,6 +332,12 @@
       .replaceAll('>', '&gt;')
       .replaceAll('"', '&quot;')
       .replaceAll("'", '&#39;');
+    const setMetricParts = (id, parts) => {
+      const element = document.getElementById(id);
+      element.classList.add('metric-parts');
+      element.innerHTML = parts.map(part => `<span>${escapeHtml(part)}</span>`).join('');
+      element.title = parts.join(' · ');
+    };
     const rows = entries => entries.length
       ? entries.map(([k, v]) => `<div class="row"><span>${escapeHtml(k)}</span><strong>${fmt.format(v)}</strong></div>`).join('')
       : '<div class="row"><span>暂无数据</span><strong>0</strong></div>';
@@ -367,7 +381,8 @@
     })[severity] || severity || '提醒';
     const alertKindLabel = kind => ({
       slow_requests: '慢建连',
-      host_failures: '失败率异常'
+      host_failures: '失败率异常',
+      disabled_service_host: '禁用服务仍请求'
     })[kind] || kind || '告警';
     const providerLabelForHost = host => {
       const value = String(host || '').toLowerCase();
@@ -387,6 +402,9 @@
       if (alert.kind === 'host_failures') {
         return `${label} 失败率 ${percent(alert.value || 0)}`;
       }
+      if (alert.kind === 'disabled_service_host') {
+        return `${label} 禁用后仍请求 ${fmt.format(alert.value || 0)} 次`;
+      }
       return `${label} ${alert.kind || '异常'}`;
     };
     const alertDetailText = alert => {
@@ -395,6 +413,9 @@
       }
       if (alert.kind === 'host_failures') {
         return `${alert.host || '未知 Host'} 失败率 ${percent(alert.value || 0)}`;
+      }
+      if (alert.kind === 'disabled_service_host') {
+        return `${alert.host || '未知 Host'} 命中已禁用服务 Host 列表，仍有 ${fmt.format(alert.value || 0)} 次请求`;
       }
       return alert.message || alert.kind || '异常';
     };
@@ -420,6 +441,9 @@
         if (intent === 'content_site') return '非核心链路，通常可忽略或加入白名单降延迟';
         return '建连偏慢，建议结合 Host 频率判断是否白名单直连';
       }
+      if (alert.kind === 'disabled_service_host') {
+        return '按来源筛选最近请求，定位残留进程后关闭对应插件或服务';
+      }
       return '先观察频率，持续出现再处理';
     };
     const requestAdviceText = request => {
@@ -434,6 +458,7 @@
         .filter(request => {
           if (alert.kind === 'slow_requests') return request.slow;
           if (alert.kind === 'host_failures') return !request.success;
+          if (alert.kind === 'disabled_service_host') return true;
           return !request.success || request.slow;
         })
         .sort((a, b) => new Date(b.started_at || 0) - new Date(a.started_at || 0));
@@ -566,7 +591,7 @@
                 <span class="flat-val-num">${successText}</span>
               </div>
 
-              <!-- 4. P50建连时延 -->
+              <!-- 4. 平均建连时延 -->
               <div class="flat-col-latency ${latencyClass}">
                 <span class="flat-val-num">${fmt.format(latency)}<span class="ms-unit">ms</span></span>
               </div>
@@ -714,12 +739,36 @@
       const process = client?.client_process || '';
       return process && process !== 'unknown' ? process : 'unknown process';
     };
+    const clientSourceKey = client => {
+      const label = client?.client_label || 'Unknown';
+      const process = client?.client_process || 'unknown';
+      return `${label} / ${process}`.toLowerCase();
+    };
+    const renderRequestSourceFilter = clients => {
+      const select = document.getElementById('requestSourceFilter');
+      if (!select) return;
+      const current = requestSourceFilterValue;
+      const options = ['<option value="">全部来源</option>'];
+      (clients || []).forEach(client => {
+        const label = clientLabel(client);
+        const process = clientProcessText(client);
+        const key = clientSourceKey(client);
+        const selected = key === current ? ' selected' : '';
+        options.push(`<option value="${escapeHtml(key)}"${selected}>${escapeHtml(label)} / ${escapeHtml(process)}</option>`);
+      });
+      select.innerHTML = options.join('');
+      if (current && ![...select.options].some(option => option.value === current)) {
+        requestSourceFilterValue = '';
+        select.value = '';
+      }
+    };
     const requestClientText = request => {
       const label = request?.client_label || 'Unknown';
       const process = request?.client_process || '';
       const pid = request?.client_pid ? ` PID ${request.client_pid}` : '';
       const evidence = request?.client_evidence ? ` · ${request.client_evidence}` : '';
-      return process ? `${label} / ${process}${pid}${evidence}` : `${label}${evidence}`;
+      const src = request?.client_port ? ` · SrcPort ${request.client_port}` : '';
+      return process ? `${label} / ${process}${pid}${src}${evidence}` : `${label}${src}${evidence}`;
     };
     const requestProviderText = request => request?.provider || 'Unknown Provider';
     const requestProviderEvidence = request => request?.provider_evidence || '暂无识别依据';
@@ -775,8 +824,11 @@
         `;
       }).join('');
     };
+    const isRequestAnomaly = request => (
+      (request.alertable !== false && !request.success) || request.slow
+    );
     const anomalyRows = requests => {
-      const anomalies = (requests || []).filter(request => !request.success || request.slow).slice(0, 5);
+      const anomalies = (requests || []).filter(isRequestAnomaly).slice(0, 5);
       if (!anomalies.length) {
         return '<div class="row"><span>当前范围内暂无异常请求</span><strong>OK</strong></div>';
       }
@@ -812,7 +864,7 @@
       `;
     };
     const anomalyTableRows = (requests, alerts) => {
-      const requestAnomalies = (requests || []).filter(request => !request.success || request.slow).slice(0, 5);
+      const requestAnomalies = (requests || []).filter(isRequestAnomaly).slice(0, 5);
       const alertRows = (alerts || []).slice(0, 3).map(alert => `
         <article class="anomaly-card">
           <div class="anomaly-meta">
@@ -1259,7 +1311,7 @@
         proxy_port: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>`,
         dashboard_port: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line></svg>`,
         python: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 18l6-6-6-6M8 6L2 12l6 6"></path></svg>`,
-        transcripts: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>`,
+        token_capture: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"></path><path d="M4 12h16"></path><path d="M4 17h10"></path><circle cx="18" cy="17" r="2"></circle></svg>`,
         whitelist: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>`,
         blocklist: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line></svg>`,
         upstream: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>`,
@@ -1622,30 +1674,42 @@
           </div>
         `;
       }
-      // 7. Claude Transcript 物理目录检测与缓存索引
-      else if (check.key === 'transcripts') {
-        const pathMatched = check.detail.match(/^([a-zA-Z]:\\[^\s，,·]+)/);
-        const folderPath = pathMatched ? pathMatched[1] : '';
-        const countMatched = check.detail.match(/已发现\s*(\d+)\s*个/);
-        const fileCount = countMatched ? countMatched[1] : '0';
+      // 7. MITM Token Capture 文件检测
+      else if (check.key === 'token_capture') {
+        const capture = check.data || {};
+        const captureDir = capture.capture_dir || '';
+        const fileCount = String(capture.file_count || 0);
+        const latestFile = capture.latest_file || '暂无';
+        const latestModified = capture.latest_modified
+          ? new Date(capture.latest_modified).toLocaleString()
+          : '暂无';
+        const latestSize = capture.latest_size_kb ? `${capture.latest_size_kb} KB` : '0 KB';
 
         customSpecsHtml = `
           <div class="modal-specs-block">
-            <span class="specs-block-title">📂 Claude Workspaces 工作区遥测</span>
+            <span class="specs-block-title">MITM Token Capture 状态</span>
             <div class="telemetry-table">
               <div class="telemetry-row">
-                <span class="tel-label">工作区根目录路径</span>
-                <span class="tel-value select-text" style="word-break: break-all; font-size: 11px;">${escapeHtml(folderPath || '未检测到工作区')}</span>
+                <span class="tel-label">捕获目录</span>
+                <span class="tel-value select-text" style="word-break: break-all; font-size: 11px;">${escapeHtml(captureDir || '未检测到目录')}</span>
               </div>
               <div class="telemetry-row">
-                <span class="tel-label">已索引 JSONL 条数</span>
+                <span class="tel-label">捕获文件</span>
                 <span class="tel-value select-text" style="font-weight:900;color:var(--blue);">${escapeHtml(fileCount)} 个文件</span>
               </div>
+              <div class="telemetry-row">
+                <span class="tel-label">最新文件</span>
+                <span class="tel-value select-text">${escapeHtml(latestFile)} · ${escapeHtml(latestSize)}</span>
+              </div>
+              <div class="telemetry-row">
+                <span class="tel-label">最近写入</span>
+                <span class="tel-value select-text">${escapeHtml(latestModified)}</span>
+              </div>
             </div>
-            ${folderPath ? `
+            ${captureDir ? `
               <div class="specs-action-row">
-                <span class="specs-path-text select-text" title="${escapeHtml(folderPath)}">${escapeHtml(folderPath)}</span>
-                <button class="mini-primary copy-path-btn" id="modalCopyPathBtn" data-path="${escapeHtml(folderPath)}">
+                <span class="specs-path-text select-text" title="${escapeHtml(captureDir)}">${escapeHtml(captureDir)}</span>
+                <button class="mini-primary copy-path-btn" id="modalCopyPathBtn" data-path="${escapeHtml(captureDir)}">
                   📋 复制绝对路径
                 </button>
               </div>
@@ -2036,7 +2100,7 @@
           <path d="${costPath}" fill="none" stroke="#d92d3a" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
           <text x="${pad}" y="${height - 6}" fill="#66738a" font-size="13" font-weight="700">${escapeHtml(first)}</text>
           <text x="${width - pad}" y="${height - 6}" text-anchor="end" fill="#66738a" font-size="13" font-weight="700">${escapeHtml(last)}</text>
-          <text x="${pad}" y="18" fill="#137f6d" font-size="13" font-weight="800">Token ${compactNumber(maxTokens)}</text>
+          <text x="${pad}" y="18" fill="#137f6d" font-size="13" font-weight="800">今日 Token ${compactNumber(maxTokens)}</text>
           <text x="${width - pad}" y="18" text-anchor="end" fill="#d92d3a" font-size="13" font-weight="800">费用 ${money(maxCost)}</text>
         </svg>
       `;
@@ -2083,10 +2147,13 @@
       const trendQuery = modelParams
         ? `range=${currentRange}&${modelParams}`
         : `range=${currentRange}`;
+      const recentQuery = requestSourceFilterValue
+        ? `limit=20&source=${encodeURIComponent(requestSourceFilterValue)}`
+        : 'limit=20';
       const [res, trendRes, recentRes, runtimeRes] = await Promise.all([
         fetch(`/api/summary?range=${currentRange}`, { cache: 'no-store' }),
         fetch(`/api/trends?${trendQuery}`, { cache: 'no-store' }),
-        fetch('/api/recent-requests?limit=20', { cache: 'no-store' }),
+        fetch(`/api/recent-requests?${recentQuery}`, { cache: 'no-store' }),
         fetch('/api/runtime-status', { cache: 'no-store' }),
       ]);
       const data = await res.json();
@@ -2101,7 +2168,11 @@
       setMetric('totalRequests', fmt.format(p.total_requests));
       text('requestSub', `${comparisonText(comparison, p.total_requests, previousProxy.total_requests)} · 成功 ${fmt.format(p.successful_requests)} / 失败 ${fmt.format(p.failed_requests)}`);
       setMetric('totalTokens', compactNumber(u.total_tokens), fmt.format(u.total_tokens));
-      text('tokenSub', `${comparisonText(comparison, u.total_tokens, previousUsage.total_tokens)} · 输入 ${compactNumber(u.input_tokens)} / 输出 ${compactNumber(u.output_tokens)}`);
+      setMetricParts('tokenSub', [
+        comparisonText(comparison, u.total_tokens, previousUsage.total_tokens),
+        `输入 ${compactNumber(u.input_tokens)}`,
+        `输出 ${compactNumber(u.output_tokens)}`,
+      ]);
       setMetric(
         'cacheTokens',
         compactNumber(u.cache_read_input_tokens + u.cache_creation_input_tokens),
@@ -2115,12 +2186,17 @@
       text('latencySub', `${deltaComparisonText(comparison, p.average_connect_latency_ms || p.average_latency_ms || 0, previousProxy.average_connect_latency_ms || previousProxy.average_latency_ms, 'ms')} · 慢建连 ${fmt.format(p.slow_requests || 0)}`);
       setMetric('estimatedCost', money(u.cost.total), `${money(u.cost.total)} CNY`);
       text('costSub', `${comparisonText(comparison, u.cost.total, previousUsage.cost?.total)} · API ${u.cost.billable_models} / 套餐 ${u.cost.token_plan_models} / 未计价 ${u.cost.unknown_models}`);
+      setMetric('peakConnections', fmt.format(runtimeData.peak_connections_today || 0));
+      text('peakConnectionsSub', `当前 ${fmt.format(runtimeData.active_connections || 0)} · 日期 ${runtimeData.peak_connections_date || '-'}`);
+      setMetric('anomalyRequests', fmt.format((p.failed_requests || 0) + (p.slow_requests || 0)));
+      text('anomalyRequestsSub', `失败 ${fmt.format(p.failed_requests || 0)} / 慢建连 ${fmt.format(p.slow_requests || 0)} · 告警 ${fmt.format((p.alerts || []).length)}`);
       renderAlerts(p);
       document.getElementById('routes').innerHTML = rows(Object.entries(p.routes));
       document.getElementById('models').innerHTML = modelRows(u.models);
       document.getElementById('hosts').innerHTML = hostRows(p.hosts || []);
       document.getElementById('providerSummary').innerHTML = providerSummaryRows(p.hosts || []);
       document.getElementById('providerHealth').innerHTML = providerHealthTable(p.hosts || []);
+      renderRequestSourceFilter(p.clients || []);
       document.getElementById('clientBreakdown').innerHTML = clientRows(p.clients || []);
       document.getElementById('recentRequests').innerHTML = recentRows(recentData.requests || []);
       document.getElementById('recentAnomalies').innerHTML = anomalyRows(recentData.requests || []);
@@ -2137,6 +2213,7 @@
       text('lastRefreshAt', `最后刷新 ${refreshedAt}`);
     }
 
+    initMetricCardFlow();
     document.querySelectorAll('[data-range]').forEach(button => {
       button.addEventListener('click', () => {
         document.querySelectorAll('[data-range]').forEach(b => b.classList.remove('active'));
@@ -2210,6 +2287,10 @@
       }
     };
     document.getElementById('autoRefresh').addEventListener('change', scheduleRefresh);
+    document.getElementById('requestSourceFilter').addEventListener('change', event => {
+      requestSourceFilterValue = event.target.value || '';
+      refresh();
+    });
     document.getElementById('themeToggle').addEventListener('click', () => {
       document.body.classList.toggle('dark-mode');
     });

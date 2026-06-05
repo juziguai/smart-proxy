@@ -218,8 +218,8 @@ def build_claude_code_panel(activity, provider_ranking, unknown_hosts):
         "last_provider_switch": last_switch,
         "ignored_noise_requests": len(activity) - len(meaningful_activity),
         "capability_boundary": (
-            "代理层基于 CONNECT Host 判断访问了哪个服务商；HTTPS 内部模型名、prompt、token "
-            "需要结合 Claude Code usage jsonl、环境变量、启动脚本选择或服务商日志确认。"
+            "代理层基于 CONNECT Host 判断访问了哪个服务商；今日 Token 来自可选 MITM "
+            "Token Capture 解密后的模型 API usage 字段。prompt 内容不进入 Dashboard 统计。"
         ),
     }
 
@@ -263,9 +263,15 @@ def handle_stats_request(
             limit = int(raw_limit)
         except ValueError:
             limit = 50
+        source = (params.get("source") or [""])[0]
         return build_stats_response(
             200,
-            {"requests": stats_store.get_recent_proxy_requests(limit=limit)},
+            {
+                "requests": stats_store.get_recent_proxy_requests(
+                    limit=limit,
+                    source=source,
+                )
+            },
         )
 
     if method == "GET" and parsed_url.path == "/api/runtime-status":

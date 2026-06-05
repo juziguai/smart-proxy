@@ -10,6 +10,7 @@ import socket
 import sys
 import time
 import uuid
+from urllib.parse import urlsplit
 
 START_TIME = time.time()
 
@@ -38,6 +39,14 @@ class LatencyTracker:
         # 传输字节量统计
         self.total_client_bytes = 0
         self.total_remote_bytes = 0
+        self.user_agent = ""
+        self.client_addr = ""
+        self.client_port = None
+        self.client_pid = None
+        self.client_process = ""
+        self.client_label = ""
+        self.client_evidence = ""
+        self.client_chain = ""
         
     def reset_for_next_keepalive(self):
         """当长连接复用并检测到流向反转时，自适应重置状态机，开启全新交互轮次"""
@@ -46,8 +55,8 @@ class LatencyTracker:
         self.t4_logged = False
 
 
-from smart_proxy.claude_usage_reader import ClaudeUsageReader
 from smart_proxy.config import DEFAULT_CONFIG
+from smart_proxy.mitm_usage_reader import default_capture_dir
 from smart_proxy.whitelist import Whitelist, WhitelistProvider, Blocklist, BlocklistProvider
 from smart_proxy.stats_store import ProxyRequestEvent, StatsStore
 from smart_proxy.stats_server import (
@@ -75,7 +84,45 @@ class ForwardResult:
     stage: str | None = None
 
 
+class RuntimeConnectionStats:
+    def __init__(self, now_provider=None):
+        self._now_provider = now_provider or (lambda: datetime.now().astimezone())
+        self.active_connections = 0
+        self.peak_connections_today = 0
+        self.peak_connections_date = self._today()
+
+    def _today(self):
+        return self._now_provider().date().isoformat()
+
+    def _reset_peak_if_needed(self):
+        today = self._today()
+        if today != self.peak_connections_date:
+            self.peak_connections_date = today
+            self.peak_connections_today = self.active_connections
+
+    def opened(self):
+        self._reset_peak_if_needed()
+        self.active_connections += 1
+        self.peak_connections_today = max(
+            self.peak_connections_today,
+            self.active_connections,
+        )
+
+    def closed(self):
+        self._reset_peak_if_needed()
+        self.active_connections = max(0, self.active_connections - 1)
+
+    def snapshot(self):
+        self._reset_peak_if_needed()
+        return {
+            "active_connections": self.active_connections,
+            "peak_connections_today": self.peak_connections_today,
+            "peak_connections_date": self.peak_connections_date,
+        }
+
+
 proxy_cache = Cache(CACHE_SEC)
+runtime_connection_stats = RuntimeConnectionStats()
 DOCTOR_DB_INTEGRITY_CACHE = {
     "checked_at": 0.0,
     "db_mtime": None,
@@ -294,11 +341,40 @@ def build_provider_health_report(path=PROVIDER_HEALTH_PATH):
 async def build_doctor_report():
     upstream = proxy_cache.get()
     whitelist.refresh_if_needed()
-    reader = ClaudeUsageReader()
-    projects_dir = reader.projects_dir
-    transcript_files = []
-    if projects_dir.exists():
-        transcript_files = list(projects_dir.rglob("*.jsonl"))[:200]
+    token_capture_dir = default_capture_dir()
+    token_capture_files = []
+    if token_capture_dir.exists():
+        token_capture_files = sorted(
+            token_capture_dir.glob("token-capture-*.jsonl"),
+            key=lambda path: path.stat().st_mtime if path.exists() else 0,
+            reverse=True,
+        )[:50]
+    latest_capture = token_capture_files[0] if token_capture_files else None
+    token_capture_data = {
+        "capture_dir": str(token_capture_dir),
+        "file_count": len(token_capture_files),
+        "latest_file": latest_capture.name if latest_capture else "",
+        "latest_modified": (
+            datetime.fromtimestamp(latest_capture.stat().st_mtime)
+            .astimezone()
+            .isoformat()
+            if latest_capture
+            else ""
+        ),
+        "latest_size_kb": (
+            round(latest_capture.stat().st_size / 1024, 1)
+            if latest_capture
+            else 0
+        ),
+    }
+    token_capture_detail = (
+        f"{token_capture_dir}，已发现 {len(token_capture_files)} 个 token-capture 文件"
+    )
+    if latest_capture:
+        token_capture_detail += (
+            f"，最新 {latest_capture.name}，"
+            f"{token_capture_data['latest_size_kb']} KB"
+        )
 
     # 1. 基础端口诊断
     proxy_ok, proxy_ms, proxy_error = _check_socket(LISTEN_HOST, LISTEN_PORT)
@@ -596,11 +672,12 @@ async def build_doctor_report():
             "确认脚本使用的 Python 可执行文件存在。",
         ),
         _doctor_item(
-            "transcripts",
-            "Claude transcript",
-            projects_dir.exists() and len(transcript_files) > 0,
-            f"{projects_dir}，已发现 {len(transcript_files)} 个 transcript 文件",
-            "如果这里为 0，确认 CLAUDE_CONFIG_DIR 或 ~/.claude/projects 路径。",
+            "token_capture",
+            "MITM Token Capture",
+            token_capture_dir.exists() and len(token_capture_files) > 0,
+            token_capture_detail,
+            "如需统计今日 Token，请在 claude.ps1 启动时启用 MITM Token Capture。",
+            data=token_capture_data,
         ),
         _doctor_item(
             "whitelist",
@@ -704,24 +781,77 @@ def build_runtime_status():
         "whitelist_count": whitelist.pattern_count,
         "whitelist_path": whitelist.path,
         "whitelist_loaded_at": whitelist.loaded_at,
+        **runtime_connection_stats.snapshot(),
     }
 
 
 def extract_host(target, headers_data):
     """Extract hostname from CONNECT target or Host header."""
-    # CONNECT: target is "host:port"
-    if ":" in target:
+    host = ""
+    # CONNECT: target is "host:port"; plain HTTP usually carries Host header.
+    if "://" in target:
+        try:
+            host = urlsplit(target).hostname or ""
+        except ValueError:
+            host = ""
+    elif ":" in target and "/" not in target:
         host = target.rsplit(":", 1)[0]
-    else:
+    elif target and not target.startswith("/") and "." in target:
         host = target
-    # plain HTTP: fallback to Host header
+    # plain HTTP: fallback to Host header.
     if not host:
         for line in headers_data.split(b"\r\n"):
             if line.lower().startswith(b"host:"):
-                host = line.split(b":", 1)[1].strip().decode()
+                host = line.split(b":", 1)[1].strip().decode("latin-1", errors="replace")
                 host, _, _ = host.partition(":")
                 break
     return host
+
+
+def extract_header(headers_data, header_name):
+    prefix = f"{header_name}:".encode("latin-1").lower()
+    for line in headers_data.split(b"\r\n"):
+        if line.lower().startswith(prefix):
+            return line.split(b":", 1)[1].strip().decode(
+                "latin-1",
+                errors="replace",
+            )
+    return ""
+
+
+async def read_request_headers(reader, first_line):
+    headers_data = first_line
+    while True:
+        line = await reader.readline()
+        headers_data += line
+        if line in (b"\r\n", b"\n", b""):
+            break
+    return headers_data
+
+
+def format_tracker_source_context(tracker, detailed=True):
+    source_parts = []
+    source = (
+        f"{tracker.client_addr}:{tracker.client_port}"
+        if tracker.client_addr and tracker.client_port
+        else tracker.client_addr or "-"
+    )
+    source_parts.append(f"Src {source}")
+    if tracker.client_pid:
+        source_parts.append(f"PID {tracker.client_pid}")
+    if tracker.client_label and (detailed or tracker.client_label != "Unknown"):
+        source_parts.append(f"Client {tracker.client_label}")
+    if tracker.client_process:
+        source_parts.append(f"Proc {tracker.client_process}")
+    if detailed and tracker.client_evidence:
+        source_parts.append(f"Evidence {tracker.client_evidence}")
+    if detailed and tracker.client_chain:
+        source_parts.append(f"Chain {tracker.client_chain}")
+    if tracker.user_agent:
+        source_parts.append(f"UA {tracker.user_agent[:160]}")
+    else:
+        source_parts.append("UA -")
+    return " | ".join(source_parts)
 
 
 def extract_target_port(method, target):
@@ -781,6 +911,7 @@ def print_profiler_report(tracker):
             
     c_bytes_str = format_bytes(tracker.total_client_bytes)
     r_bytes_str = format_bytes(tracker.total_remote_bytes)
+    source_context = format_tracker_source_context(tracker)
     
     profiler_logger.info(
         f"\n"
@@ -791,6 +922,7 @@ def print_profiler_report(tracker):
         f"│  - T4 (云端首包思考): {t4:.3f} s (TTFT)\n"
         f"│  - T5 (流式数据传输): {t5:.3f} s\n"
         f"│  - 链条全程总耗时  : {t_total:.3f} s\n"
+        f"│  - 请求来源追溯    : {source_context}\n"
         f"│  - 物理流量交互统计: 客户端发送 {c_bytes_str} | 远程返回 {r_bytes_str}\n"
         f"└──────────────────────────────────────────────────────────────────────────"
     )
@@ -844,7 +976,8 @@ async def relay_remote_to_client(src_reader, dst_writer, tracker):
                     
                 if not tracker.t4_logged:
                     profiler_logger.info(
-                        f"[{tracker.request_id}] T4 (TTFT - 云端首包思考耗时): {t4:.3f}s (Host: {tracker.host})"
+                        f"[{tracker.request_id}] T4 (TTFT - 云端首包思考耗时): {t4:.3f}s "
+                        f"(Host: {tracker.host}) | {format_tracker_source_context(tracker, detailed=False)}"
                     )
                     tracker.t4_logged = True
             
@@ -1113,17 +1246,15 @@ async def connect_via_proxy(client_r, client_w, target, upstream, tracker=None):
 
 # ── plain HTTP (non-CONNECT) ──────────────────────────────────────────
 
-async def http_direct(client_r, client_w, first_line):
+async def http_direct(client_r, client_w, headers_data):
     """Forward plain HTTP directly. 读取 Host header 决定目标."""
-    headers_data = first_line
     host, port = None, 80
-    while True:
-        line = await client_r.readline()
-        headers_data += line
-        if line in (b"\r\n", b"\n", b""):
-            break
+    for line in headers_data.split(b"\r\n"):
         if line.lower().startswith(b"host:") and host is None:
-            h = line.split(b":", 1)[1].strip().decode()
+            h = line.split(b":", 1)[1].strip().decode(
+                "latin-1",
+                errors="replace",
+            )
             host, _, p = h.partition(":")
             port = int(p) if p else 80
 
@@ -1156,7 +1287,7 @@ async def http_direct(client_r, client_w, first_line):
     return ForwardResult(success=True, connect_latency_ms=connect_latency_ms)
 
 
-async def http_via_proxy(client_r, client_w, first_line, upstream):
+async def http_via_proxy(client_r, client_w, headers_data, upstream):
     """Forward plain HTTP through upstream proxy."""
     phost, pport = upstream
     connect_started = time.monotonic()
@@ -1173,14 +1304,9 @@ async def http_via_proxy(client_r, client_w, first_line, upstream):
         )
     connect_latency_ms = elapsed_ms(connect_started)
 
-    pw.write(first_line)
-    while True:
-        line = await client_r.readline()
-        pw.write(line)
-        if line in (b"\r\n", b"\n", b""):
-            break
+    pw.write(headers_data)
 
-    body = await _read_body(client_r, first_line)
+    body = await _read_body(client_r, headers_data)
     if body:
         pw.write(body)
     await pw.drain()
@@ -1225,6 +1351,7 @@ def record_proxy_stats(
     client_label="",
     client_evidence="",
     client_chain="",
+    user_agent="",
 ):
     if stats_store is None:
         return
@@ -1253,6 +1380,7 @@ def record_proxy_stats(
                 client_label=client_label,
                 client_evidence=client_evidence,
                 client_chain=client_chain,
+                user_agent=user_agent,
             )
         )
     except Exception as exc:
@@ -1386,6 +1514,14 @@ def record_route_metrics(host: str, route: str, latency_ms: float, success: bool
 # ── main handler ──────────────────────────────────────────────────────
 
 async def handle(client_r, client_w):
+    runtime_connection_stats.opened()
+    try:
+        await _handle_proxy_request(client_r, client_w)
+    finally:
+        runtime_connection_stats.closed()
+
+
+async def _handle_proxy_request(client_r, client_w):
     _enable_nodelay(client_w)
     started_at = utc_now_iso()
     start_monotonic = time.monotonic()
@@ -1394,6 +1530,13 @@ async def handle(client_r, client_w):
     
     client_addr, client_port = get_client_peer(client_w)
     client_info = resolve_client_process(client_addr, client_port)
+    tracker.client_addr = client_addr
+    tracker.client_port = client_port
+    tracker.client_pid = client_info.get("pid")
+    tracker.client_process = client_info.get("process", "")
+    tracker.client_label = client_info.get("label", "")
+    tracker.client_evidence = client_info.get("evidence", "")
+    tracker.client_chain = client_info.get("chain", "")
     upstream = proxy_cache.get()
     upstream_host = upstream[0] if upstream else ""
     upstream_port = upstream[1] if upstream else None
@@ -1406,6 +1549,7 @@ async def handle(client_r, client_w):
     connect_latency_ms = None
     target_port = None
     stage = "completed"
+    user_agent = ""
     try:
         first_line = await asyncio.wait_for(client_r.readline(), timeout=10)
     except asyncio.TimeoutError:
@@ -1430,6 +1574,7 @@ async def handle(client_r, client_w):
             client_label=client_info["label"],
             client_evidence=client_info.get("evidence", ""),
             client_chain=client_info.get("chain", ""),
+            user_agent=user_agent,
         )
         client_w.close()
         return
@@ -1456,6 +1601,7 @@ async def handle(client_r, client_w):
             client_label=client_info["label"],
             client_evidence=client_info.get("evidence", ""),
             client_chain=client_info.get("chain", ""),
+            user_agent=user_agent,
         )
         client_w.close()
         return
@@ -1485,14 +1631,18 @@ async def handle(client_r, client_w):
             client_label=client_info["label"],
             client_evidence=client_info.get("evidence", ""),
             client_chain=client_info.get("chain", ""),
+            user_agent=user_agent,
         )
         safe_write(client_w, b"HTTP/1.1 400 Bad Request\r\n\r\n")
         client_w.close()
         return
     target_port = extract_target_port(method, target)
+    headers_data = await read_request_headers(client_r, first_line)
+    user_agent = extract_header(headers_data, "user-agent")
+    tracker.user_agent = user_agent
 
     # extract host and check whitelist
-    host = extract_host(target, first_line)
+    host = extract_host(target, headers_data)
     tracker.host = host or target
 
     # ── 最优先：屏蔽名单检查（快速拒绝，不转发）────────────────────
@@ -1522,6 +1672,7 @@ async def handle(client_r, client_w):
             client_label=client_info["label"],
             client_evidence=client_info.get("evidence", ""),
             client_chain=client_info.get("chain", ""),
+            user_agent=user_agent,
         )
         return
 
@@ -1543,10 +1694,6 @@ async def handle(client_r, client_w):
 
     try:
         if method == "CONNECT":
-            while True:
-                line = await client_r.readline()
-                if line in (b"\r\n", b"\n", b""):
-                    break
             if force_direct or not upstream:
                 try:
                     result = await connect_direct_tunnel(client_r, client_w, target, tracker)
@@ -1559,9 +1706,9 @@ async def handle(client_r, client_w):
                     result = await connect_via_proxy(client_r, client_w, target, upstream)
         else:
             if force_direct or not upstream:
-                result = await http_direct(client_r, client_w, first_line)
+                result = await http_direct(client_r, client_w, headers_data)
             else:
-                result = await http_via_proxy(client_r, client_w, first_line, upstream)
+                result = await http_via_proxy(client_r, client_w, headers_data, upstream)
         if isinstance(result, ForwardResult):
             success = result.success
             connect_latency_ms = result.connect_latency_ms
@@ -1598,6 +1745,7 @@ async def handle(client_r, client_w):
             client_label=client_info["label"],
             client_evidence=client_info.get("evidence", ""),
             client_chain=client_info.get("chain", ""),
+            user_agent=user_agent,
         )
         if host:
             sampled_lat = duration_ms if route in ("direct", "direct_whitelist") else (connect_latency_ms or 0.0)

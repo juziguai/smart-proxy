@@ -22,6 +22,7 @@ class SmartProxyConfig:
     stats_db_file: Path
     provider_health_path: Path
     provider_rules_path: Path
+    disabled_service_hosts: tuple[str, ...]
 
 
 DEFAULTS = {
@@ -38,6 +39,7 @@ DEFAULTS = {
     "stats_db_file": "smart-proxy-stats.db",
     "provider_health_path": "logs/provider-health.json",
     "provider_rules_path": "provider-rules.json",
+    "disabled_service_hosts": [],
 }
 
 ENV_KEYS = {
@@ -54,6 +56,7 @@ ENV_KEYS = {
     "SMART_PROXY_STATS_DB_FILE": "stats_db_file",
     "SMART_PROXY_PROVIDER_HEALTH_PATH": "provider_health_path",
     "SMART_PROXY_PROVIDER_RULES_PATH": "provider_rules_path",
+    "SMART_PROXY_DISABLED_SERVICE_HOSTS": "disabled_service_hosts",
 }
 
 INT_FIELDS = {
@@ -71,6 +74,10 @@ PATH_FIELDS = {
     "stats_db_file",
     "provider_health_path",
     "provider_rules_path",
+}
+
+LIST_FIELDS = {
+    "disabled_service_hosts",
 }
 
 
@@ -95,6 +102,8 @@ def load_config(config_path=None, environ=None, root_dir=None):
         values[field] = _positive_int(field, values[field])
     for field in PATH_FIELDS:
         values[field] = _resolve_path(values[field], root)
+    for field in LIST_FIELDS:
+        values[field] = _string_tuple(field, values[field])
 
     return SmartProxyConfig(**values)
 
@@ -129,6 +138,24 @@ def _positive_int(field, value):
     if parsed <= 0:
         raise ValueError(f"{field} must be positive")
     return parsed
+
+
+def _string_tuple(field, value):
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        items = value.split(",")
+    elif isinstance(value, (list, tuple)):
+        items = value
+    else:
+        raise ValueError(f"{field} must be a list or comma-separated string")
+
+    normalized = []
+    for item in items:
+        text = str(item).strip().lower()
+        if text:
+            normalized.append(text)
+    return tuple(dict.fromkeys(normalized))
 
 
 DEFAULT_CONFIG = load_config()
