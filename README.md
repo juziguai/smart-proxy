@@ -2,7 +2,7 @@
 
 Windows 本地智能代理 sidecar。
 
-当前版本：`v0.6.0`
+当前版本：`v0.7.0`
 
 它固定监听 `127.0.0.1:8889`，由 Claude Code、Antigravity、Cockpit Tools 等客户端连接；请求进来后，smart-proxy 会按当前 Windows 系统代理状态、白名单和本地规则决定直连还是转发到上游代理。
 
@@ -10,12 +10,13 @@ Windows 本地智能代理 sidecar。
 
 ## 更新摘要
 
-`v0.6.0` 聚焦真实 Token 统计与请求来源追溯闭环：
+`v0.7.0` 聚焦 MITM Token Capture 质量闭环与请求流合并：
 
-- 新增可选 MITM Token Capture，捕获模型 API 响应中的 `usage` 字段，作为 Dashboard “今日 Token”的默认数据源。
-- Claude 启动脚本支持首次确认并记住 MITM 偏好，日常启动自动复用 `127.0.0.1:8891`，也可用环境变量临时覆盖。
-- 请求来源追溯补充 User-Agent、源端口、PID、进程链和 evidence，Profiler 与 Dashboard 均可查看。
-- Doctor 改为展示 MITM Token Capture 状态，流量分析页补充来源筛选、异常告警和更清晰的能力边界说明。
+- MITM Token Capture 新增请求开始、无 usage、流未完成、解析失败、usage 已捕获等结构化状态。
+- `127.0.0.1:8891` 默认显式上游到 `127.0.0.1:8889`，让 Claude Code MITM 流量继续经过 smart-proxy。
+- “最近请求”合并代理请求与 token-capture 记录，展示 Token、捕获状态和 Claude Code 来源证据。
+- Doctor 与运行状态新增 Token Capture 数据质量、sidecar PID、stderr 尾部和今日捕获统计。
+- 今日 Token 时间窗口修正为 SQLite datetime 比较，避免午夜后混入上一天本地时区记录。
 
 完整版本历史见 [CHANGELOG.md](CHANGELOG.md)。
 

@@ -1,9 +1,11 @@
 import asyncio
 import json
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from .config import DEFAULT_CONFIG
+from .mitm_usage_reader import MitmUsageReader
 from .provider_classifier import classify_provider, get_provider_rules_status
 from .stats_store import SLOW_REQUEST_THRESHOLD_MS
 
@@ -18,6 +20,24 @@ def build_stats_response(status, payload):
         {"Content-Type": "application/json; charset=utf-8"},
         json.dumps(payload).encode("utf-8"),
     )
+
+
+def merge_recent_requests(proxy_requests, capture_requests, limit):
+    return sorted(
+        [*proxy_requests, *capture_requests],
+        key=lambda request: request_sort_value(request.get("started_at")),
+        reverse=True,
+    )[:limit]
+
+
+def request_sort_value(value):
+    try:
+        text = str(value or "").strip()
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        return datetime.fromisoformat(text).timestamp()
+    except (TypeError, ValueError, OSError):
+        return 0.0
 
 
 def build_html_response(status, html):
@@ -263,13 +283,31 @@ def handle_stats_request(
             limit = int(raw_limit)
         except ValueError:
             limit = 50
+        limit = max(1, min(limit, 200))
         source = (params.get("source") or [""])[0]
+        include_mitm = (
+            (params.get("include_mitm") or ["1"])[0].strip().lower()
+            not in {"0", "false", "no"}
+        )
+        proxy_requests = stats_store.get_recent_proxy_requests(
+            limit=limit,
+            source=source,
+        )
+        capture_requests = (
+            MitmUsageReader().read_recent_capture_requests(
+                limit=limit,
+                source=source,
+            )
+            if include_mitm
+            else []
+        )
         return build_stats_response(
             200,
             {
-                "requests": stats_store.get_recent_proxy_requests(
-                    limit=limit,
-                    source=source,
+                "requests": merge_recent_requests(
+                    proxy_requests,
+                    capture_requests,
+                    limit,
                 )
             },
         )

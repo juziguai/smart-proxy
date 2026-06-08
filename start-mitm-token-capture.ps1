@@ -1,6 +1,7 @@
 param(
     [int]$Port = 8891,
     [string]$ListenHost = "127.0.0.1",
+    [string]$UpstreamProxy = "http://127.0.0.1:8889",
     [string]$AllowedHosts = "",
     [string]$CaptureDir = "",
     [switch]$Background
@@ -46,6 +47,7 @@ $Cert = Join-Path $env:USERPROFILE ".mitmproxy\mitmproxy-ca-cert.cer"
 Write-Host "[mitm-token] python  : $Python"
 Write-Host "[mitm-token] addon   : $Addon"
 Write-Host "[mitm-token] listen  : $ListenHost`:$Port"
+Write-Host "[mitm-token] upstream: $UpstreamProxy"
 Write-Host "[mitm-token] output  : $(if ($CaptureDir) { $CaptureDir } else { Join-Path $Root 'logs' })"
 Write-Host "[mitm-token] CA cert : $Cert"
 Write-Host "[mitm-token] note    : trust the CA manually before HTTPS clients can be decrypted."
@@ -56,14 +58,16 @@ $Args = @(
     "-s", $Addon,
     "--listen-host", $ListenHost,
     "--listen-port", "$Port",
+    "--mode", "upstream:$UpstreamProxy",
     "--set", "connection_strategy=lazy"
 )
 $BackgroundArgumentLine = (
-    '-c "{0}" -s "{1}" --listen-host "{2}" --listen-port {3} --set connection_strategy=lazy' -f
+    '-c "{0}" -s "{1}" --listen-host "{2}" --listen-port {3} --mode "upstream:{4}" --set connection_strategy=lazy' -f
     $MitmCode,
     $Addon,
     $ListenHost,
-    $Port
+    $Port,
+    $UpstreamProxy
 )
 
 if ($Background) {

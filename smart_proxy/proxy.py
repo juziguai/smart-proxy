@@ -7,6 +7,7 @@ import logging
 import os
 from pathlib import Path
 import socket
+import subprocess
 import sys
 import time
 import uuid
@@ -56,7 +57,7 @@ class LatencyTracker:
 
 
 from smart_proxy.config import DEFAULT_CONFIG
-from smart_proxy.mitm_usage_reader import default_capture_dir
+from smart_proxy.mitm_usage_reader import MitmUsageReader, default_capture_dir
 from smart_proxy.whitelist import Whitelist, WhitelistProvider, Blocklist, BlocklistProvider
 from smart_proxy.stats_store import ProxyRequestEvent, StatsStore
 from smart_proxy.stats_server import (
@@ -74,6 +75,8 @@ READ_SIZE = DEFAULT_CONFIG.read_size
 PROVIDER_HEALTH_PATH = DEFAULT_CONFIG.provider_health_path
 UNKNOWN_HOST = "(unknown)"
 UNPARSED_ROUTE = "unparsed"
+MITM_TOKEN_CAPTURE_HOST = "127.0.0.1"
+MITM_TOKEN_CAPTURE_PORT = 8891
 
 
 @dataclass(frozen=True)
@@ -272,6 +275,85 @@ def _check_socket(host, port, timeout=0.35):
         return False, elapsed_ms(started), str(exc)
 
 
+def _local_day_start_iso():
+    now = datetime.now().astimezone()
+    return datetime.combine(
+        now.date(),
+        datetime.min.time(),
+        tzinfo=now.tzinfo,
+    ).isoformat()
+
+
+def _find_listening_pid(port):
+    if sys.platform != "win32":
+        return None
+    try:
+        output = subprocess.check_output(
+            ["netstat", "-ano"],
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=2,
+        )
+    except Exception:
+        return None
+    marker = f":{int(port)}"
+    for line in output.splitlines():
+        parts = line.split()
+        if len(parts) < 5:
+            continue
+        if marker in parts[1] and parts[-2].upper() == "LISTENING":
+            try:
+                return int(parts[-1])
+            except ValueError:
+                return None
+    return None
+
+
+def _tail_nonempty_lines(path, limit=3):
+    try:
+        lines = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    return [line for line in lines if line.strip()][-limit:]
+
+
+def build_token_capture_quality_report():
+    reader = MitmUsageReader()
+    since = _local_day_start_iso()
+    quality = reader.read_capture_quality(since=since)
+    sidecar_ok, sidecar_ms, sidecar_error = _check_socket(
+        MITM_TOKEN_CAPTURE_HOST,
+        MITM_TOKEN_CAPTURE_PORT,
+    )
+    pid = _find_listening_pid(MITM_TOKEN_CAPTURE_PORT) if sidecar_ok else None
+    stderr_path = default_capture_dir() / "mitm-token-capture.err.log"
+    stderr_tail = _tail_nonempty_lines(stderr_path)
+    quality.update(
+        {
+            "since": since,
+            "sidecar_running": sidecar_ok,
+            "sidecar_latency_ms": sidecar_ms,
+            "sidecar_error": sidecar_error,
+            "sidecar_pid": pid,
+            "sidecar_url": f"http://{MITM_TOKEN_CAPTURE_HOST}:{MITM_TOKEN_CAPTURE_PORT}",
+            "stderr_tail": stderr_tail,
+        }
+    )
+    if not sidecar_ok:
+        quality.update(
+            {
+                "status": "paused",
+                "label": "暂停",
+                "detail": (
+                    "MITM sidecar 未监听，今日 Token 暂停捕获；"
+                    "Claude 启动脚本会在下次启用时尝试拉起"
+                ),
+            }
+        )
+    return quality
+
+
 def _doctor_item(key, label, ok, detail, fix="", status=None, data=None, actions=None):
     if status is None:
         status = "ok" if ok else "warning"
@@ -375,6 +457,21 @@ async def build_doctor_report():
             f"，最新 {latest_capture.name}，"
             f"{token_capture_data['latest_size_kb']} KB"
         )
+    token_capture_quality = build_token_capture_quality_report()
+    token_capture_data.update(token_capture_quality)
+    token_capture_status = (
+        "ok"
+        if token_capture_quality.get("status") == "accurate"
+        else "warning"
+    )
+    token_capture_detail = (
+        f"{token_capture_quality.get('sidecar_url')} "
+        f"{'已监听' if token_capture_quality.get('sidecar_running') else '未监听'}"
+        f"{'，PID ' + str(token_capture_quality.get('sidecar_pid')) if token_capture_quality.get('sidecar_pid') else ''}"
+        f" · 数据质量 {token_capture_quality.get('label')} "
+        f"({token_capture_quality.get('detail')})"
+        f" · 最新文件 {token_capture_data.get('latest_file') or '暂无'}"
+    )
 
     # 1. 基础端口诊断
     proxy_ok, proxy_ms, proxy_error = _check_socket(LISTEN_HOST, LISTEN_PORT)
@@ -674,10 +771,12 @@ async def build_doctor_report():
         _doctor_item(
             "token_capture",
             "MITM Token Capture",
-            token_capture_dir.exists() and len(token_capture_files) > 0,
+            token_capture_quality.get("sidecar_running")
+            and token_capture_quality.get("status") in {"accurate", "partial"},
             token_capture_detail,
             "如需统计今日 Token，请在 claude.ps1 启动时启用 MITM Token Capture。",
             data=token_capture_data,
+            status=token_capture_status,
         ),
         _doctor_item(
             "whitelist",
@@ -773,6 +872,7 @@ async def build_doctor_report():
 def build_runtime_status():
     upstream = proxy_cache.get()
     whitelist.refresh_if_needed()
+    token_capture_quality = build_token_capture_quality_report()
     return {
         "proxy_enabled": upstream is not None,
         "upstream_proxy": (
@@ -781,6 +881,7 @@ def build_runtime_status():
         "whitelist_count": whitelist.pattern_count,
         "whitelist_path": whitelist.path,
         "whitelist_loaded_at": whitelist.loaded_at,
+        "token_capture_quality": token_capture_quality,
         **runtime_connection_stats.snapshot(),
     }
 

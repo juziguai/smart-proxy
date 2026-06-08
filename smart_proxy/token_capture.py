@@ -27,6 +27,8 @@ MODEL_HOST_MARKERS = (
 
 @dataclass(frozen=True)
 class CapturedTokenUsage:
+    capture_status: str
+    status_detail: str
     timestamp: str
     request_id: str
     provider: str
@@ -82,34 +84,86 @@ def extract_token_usage(
     request_model: str = "",
     timestamp: str | None = None,
 ) -> CapturedTokenUsage | None:
-    text = _decode_text(content)
-    if not text:
+    usage = extract_token_capture_record(
+        content,
+        content_type,
+        host=host,
+        method=method,
+        path=path,
+        request_id=request_id,
+        request_model=request_model,
+        timestamp=timestamp,
+    )
+    if usage.capture_status != "usage_found":
         return None
+    return usage
 
-    usage = _extract_from_json_text(text)
-    if usage is None and _looks_like_sse(text, content_type):
-        usage = _extract_from_sse_text(text)
+
+def extract_token_capture_record(
+    content: bytes,
+    content_type: str = "",
+    *,
+    host: str = "",
+    method: str = "",
+    path: str = "",
+    request_id: str = "",
+    request_model: str = "",
+    timestamp: str | None = None,
+) -> CapturedTokenUsage:
+    text = _decode_text(content)
+    provider = provider_for_host(host)
+    base = {
+        "timestamp": timestamp or local_now_iso(),
+        "request_id": request_id,
+        "provider": provider["provider"],
+        "provider_key": provider["provider_key"],
+        "host": host,
+        "method": method,
+        "path": path,
+        "model": request_model or "unknown",
+    }
+    if not text:
+        status = "stream_incomplete" if "text/event-stream" in content_type.lower() else "no_usage"
+        return _empty_capture_record(
+            base,
+            status,
+            "empty response body",
+        )
+
+    usage, failure_status, failure_detail = _extract_usage_with_status(
+        text,
+        content_type,
+    )
     if usage is None:
-        return None
+        return _empty_capture_record(
+            base,
+            failure_status,
+            failure_detail,
+        )
 
     total_tokens = usage.get("total_tokens") or (
         usage["input_tokens"] + usage["output_tokens"]
     )
     if total_tokens <= 0:
-        return None
+        return _empty_capture_record(
+            base,
+            "no_usage",
+            "usage fields contained zero tokens",
+        )
 
-    provider = provider_for_host(host)
     model = usage.get("model") or ""
     if model == "unknown":
         model = ""
     return CapturedTokenUsage(
-        timestamp=timestamp or local_now_iso(),
-        request_id=request_id,
-        provider=provider["provider"],
-        provider_key=provider["provider_key"],
-        host=host,
-        method=method,
-        path=path,
+        capture_status="usage_found",
+        status_detail="usage fields captured",
+        timestamp=base["timestamp"],
+        request_id=base["request_id"],
+        provider=base["provider"],
+        provider_key=base["provider_key"],
+        host=base["host"],
+        method=base["method"],
+        path=base["path"],
         model=model or request_model or "unknown",
         input_tokens=usage["input_tokens"],
         output_tokens=usage["output_tokens"],
@@ -148,6 +202,34 @@ def _looks_like_sse(text: str, content_type: str) -> bool:
     return "text/event-stream" in content_type.lower() or "\ndata:" in text
 
 
+def _extract_usage_with_status(
+    text: str,
+    content_type: str,
+) -> tuple[dict[str, Any] | None, str, str]:
+    stripped = text.strip()
+    if stripped and stripped[0] in "{[":
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError as exc:
+            return None, "parse_failed", f"json parse failed: {exc.msg}"
+        usage = _usage_from_payload(payload)
+        if usage is not None:
+            return usage, "", ""
+        return None, "no_usage", "json response did not contain usage fields"
+
+    if _looks_like_sse(text, content_type):
+        usage, saw_done, parse_errors = _extract_from_sse_text_with_meta(text)
+        if usage is not None:
+            return usage, "", ""
+        if parse_errors:
+            return None, "parse_failed", f"sse data parse failed {parse_errors} time(s)"
+        if not saw_done:
+            return None, "stream_incomplete", "sse stream ended before [DONE] and no usage fields were captured"
+        return None, "no_usage", "sse stream completed without usage fields"
+
+    return None, "no_usage", "response did not look like JSON or SSE usage payload"
+
+
 def _extract_from_json_text(text: str) -> dict[str, Any] | None:
     stripped = text.strip()
     if not stripped or stripped[0] not in "{[":
@@ -160,19 +242,32 @@ def _extract_from_json_text(text: str) -> dict[str, Any] | None:
 
 
 def _extract_from_sse_text(text: str) -> dict[str, Any] | None:
+    usage, _saw_done, _parse_errors = _extract_from_sse_text_with_meta(text)
+    return usage
+
+
+def _extract_from_sse_text_with_meta(
+    text: str,
+) -> tuple[dict[str, Any] | None, bool, int]:
     merged = _empty_usage()
     evidence = []
     model = ""
     found = False
+    saw_done = False
+    parse_errors = 0
     for line in text.splitlines():
         if not line.startswith("data:"):
             continue
         data = line[5:].strip()
-        if not data or data == "[DONE]":
+        if not data:
+            continue
+        if data == "[DONE]":
+            saw_done = True
             continue
         try:
             payload = json.loads(data)
         except json.JSONDecodeError:
+            parse_errors += 1
             continue
         item = _usage_from_payload(payload)
         if item is None:
@@ -183,11 +278,38 @@ def _extract_from_sse_text(text: str) -> dict[str, Any] | None:
         _merge_usage_max(merged, item)
 
     if not found:
-        return None
+        return None, saw_done, parse_errors
     merged["model"] = model or merged.get("model") or "unknown"
     merged["evidence"] = "sse data usage: " + "; ".join(sorted(set(evidence)))
     merged["confidence"] = 0.9
-    return merged
+    return merged, saw_done, parse_errors
+
+
+def _empty_capture_record(
+    base: dict[str, Any],
+    capture_status: str,
+    status_detail: str,
+) -> CapturedTokenUsage:
+    return CapturedTokenUsage(
+        capture_status=capture_status,
+        status_detail=status_detail,
+        timestamp=base["timestamp"],
+        request_id=base["request_id"],
+        provider=base["provider"],
+        provider_key=base["provider_key"],
+        host=base["host"],
+        method=base["method"],
+        path=base["path"],
+        model=base["model"],
+        input_tokens=0,
+        output_tokens=0,
+        total_tokens=0,
+        cache_read_input_tokens=0,
+        cache_creation_input_tokens=0,
+        reasoning_tokens=0,
+        evidence=status_detail,
+        confidence=0.0,
+    )
 
 
 def _usage_from_payload(payload: Any) -> dict[str, Any] | None:

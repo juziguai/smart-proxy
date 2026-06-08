@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.7.0
+
+MITM Token Capture 质量闭环与请求流合并：
+
+- MITM Token Capture 新增 `request_started`、`usage_found`、`no_usage`、`stream_incomplete`、`parse_failed` 等结构化状态，便于判断是未返回 usage、流式响应未完成，还是解析失败。
+- `start-mitm-token-capture.ps1` 默认以 `upstream:http://127.0.0.1:8889` 启动 mitmdump，形成 `Claude Code -> 8891 MITM -> 8889 smart-proxy -> 上游代理` 链路。
+- `/api/recent-requests` 合并 proxy 请求和 token-capture JSONL 请求，Dashboard 可在最近请求里看到 Claude Code MITM 流量、Token 数、捕获状态和来源证据。
+- Doctor 与 `/api/runtime-status` 新增 Token Capture 数据质量、sidecar 监听状态、PID、stderr 尾部和今日捕获状态计数。
+- 今日 Token 统计修正本地时区时间窗口，`usage_events.timestamp` 改用 SQLite `datetime(...)` 比较，避免午夜后混入上一天记录。
+- 统计库新增本地上游连接拒绝的批次归因，Dashboard 异常请求区按批次提示“上游出口不可达”，减少单条失败误判。
+- Dashboard 增加 Token 数据质量徽标、请求 Token pill、捕获中/未完成/解析失败状态和异常批次摘要。
+
 ## v0.6.0
 
 真实 Token 统计与请求来源追溯闭环：

@@ -338,6 +338,22 @@
       element.innerHTML = parts.map(part => `<span>${escapeHtml(part)}</span>`).join('');
       element.title = parts.join(' · ');
     };
+    const updateTokenQuality = quality => {
+      const element = document.getElementById('tokenQuality');
+      if (!element) return;
+      const rawStatus = quality?.status || 'unknown';
+      const status = ['accurate', 'partial', 'paused', 'unknown'].includes(rawStatus)
+        ? rawStatus
+        : 'unknown';
+      const label = quality?.label || '未知';
+      const detail = quality?.detail || '尚无捕获状态';
+      const sidecar = quality?.sidecar_running
+        ? `sidecar 正常${quality.sidecar_pid ? ` PID ${quality.sidecar_pid}` : ''}`
+        : 'sidecar 未监听';
+      element.className = `token-quality ${status}`;
+      element.textContent = `数据质量 ${label}`;
+      element.title = `${detail} · ${sidecar}`;
+    };
     const rows = entries => entries.length
       ? entries.map(([k, v]) => `<div class="row"><span>${escapeHtml(k)}</span><strong>${fmt.format(v)}</strong></div>`).join('')
       : '<div class="row"><span>暂无数据</span><strong>0</strong></div>';
@@ -372,7 +388,8 @@
     const routeText = route => ({
       proxy: '系统代理',
       direct: '直连',
-      direct_whitelist: '白名单直连'
+      direct_whitelist: '白名单直连',
+      mitm_token_capture: 'MITM 捕获'
     })[route] || route;
     const severityLabel = severity => ({
       critical: '严重',
@@ -447,6 +464,9 @@
       return '先观察频率，持续出现再处理';
     };
     const requestAdviceText = request => {
+      if (request?.diagnosis === 'local_upstream_unavailable_batch') {
+        return '批量上下文显示本地上游当时不可达，优先确认出口代理启动顺序';
+      }
       if (!request.success) return '单次请求失败，优先查看错误信息和上游可用性';
       if (request.slow) return '单次请求偏慢，若重复出现再考虑白名单或换线路';
       return '观察即可';
@@ -770,8 +790,43 @@
       const src = request?.client_port ? ` · SrcPort ${request.client_port}` : '';
       return process ? `${label} / ${process}${pid}${src}${evidence}` : `${label}${src}${evidence}`;
     };
+    const requestDiagnosisText = request => request?.diagnosis_label || '';
+    const requestDiagnosisDetail = request => request?.diagnosis_detail || '';
     const requestProviderText = request => request?.provider || 'Unknown Provider';
     const requestProviderEvidence = request => request?.provider_evidence || '暂无识别依据';
+    const requestMetricMs = value => (
+      value === null || value === undefined || value === ''
+        ? '-'
+        : `${fmt.format(value)}ms`
+    );
+    const requestDurationValue = request => (
+      request?.duration_ms !== null && request?.duration_ms !== undefined
+        ? request.duration_ms
+        : request?.latency_ms
+    );
+    const requestTokenPill = request => {
+      const usage = request?.token_usage || {};
+      const total = Number(usage.total_tokens || 0);
+      if (!total) return '';
+      const title = [
+        usage.model ? `模型 ${usage.model}` : '',
+        `输入 ${fmt.format(usage.input_tokens || 0)}`,
+        `输出 ${fmt.format(usage.output_tokens || 0)}`,
+        usage.cache_read_input_tokens ? `缓存读 ${fmt.format(usage.cache_read_input_tokens)}` : '',
+        usage.evidence || ''
+      ].filter(Boolean).join(' · ');
+      return `<span class="pill token-pill" title="${escapeHtml(title)}">Token ${fmt.format(total)}</span>`;
+    };
+    const requestStatusClass = request => {
+      if (request?.capture_status === 'request_started') return 'warn';
+      return request?.success ? 'good' : 'bad';
+    };
+    const requestStatusText = request => {
+      if (request?.capture_status === 'request_started') return '捕获中';
+      if (request?.capture_status === 'stream_incomplete') return '未完成';
+      if (request?.capture_status === 'parse_failed') return '解析失败';
+      return request?.success ? '成功' : '失败';
+    };
     const clientRows = clients => {
       if (!clients.length) {
         return '<div class="row"><span>No client data</span><strong>0</strong></div>';
@@ -800,9 +855,14 @@
         const when = request.started_at
           ? new Date(request.started_at).toLocaleTimeString()
           : '-';
-        const statusClass = request.success ? 'good' : 'bad';
-        const statusText = request.success ? '成功' : '失败';
+        const statusClass = requestStatusClass(request);
+        const statusText = requestStatusText(request);
         const error = request.error ? ` / ${request.error}` : '';
+        const diagnosis = requestDiagnosisText(request);
+        const diagnosisPill = diagnosis
+          ? `<span class="pill warn" title="${escapeHtml(requestDiagnosisDetail(request))}">${escapeHtml(diagnosis)}</span>`
+          : '';
+        const tokenPill = requestTokenPill(request);
         const rowClass = request.success
           ? (request.slow ? 'slow-request' : '')
           : 'failed-request';
@@ -814,10 +874,12 @@
             </div>
             <div class="host-meta">
               <span class="pill ${statusClass}">${statusText}</span>
+              ${diagnosisPill}
               <span class="pill" title="${escapeHtml(requestProviderEvidence(request))}">${escapeHtml(requestProviderText(request))}</span>
+              ${tokenPill}
               <span class="pill client-source" title="${escapeHtml(requestClientText(request))}">${escapeHtml(requestClientText(request))}</span>
-              <span class="pill">建连 ${fmt.format(request.connect_latency_ms || 0)}ms</span>
-              <span class="pill">持续 ${fmt.format(request.duration_ms || request.latency_ms || 0)}ms</span>
+              <span class="pill">建连 ${escapeHtml(requestMetricMs(request.connect_latency_ms))}</span>
+              <span class="pill">持续 ${escapeHtml(requestMetricMs(requestDurationValue(request)))}</span>
               <span class="request-time">${escapeHtml(when)}</span>
             </div>
           </div>
@@ -841,8 +903,9 @@
       }
       const rows = items.map(request => {
         const when = request.started_at ? new Date(request.started_at).toLocaleTimeString() : '-';
-        const statusClass = request.success ? 'good' : 'bad';
-        const statusText = request.success ? '成功' : '失败';
+        const statusClass = requestStatusClass(request);
+        const statusText = requestStatusText(request);
+        const duration = requestMetricMs(requestDurationValue(request));
         return `
           <tr>
             <td>${escapeHtml(when)}</td>
@@ -852,7 +915,7 @@
             <td>${escapeHtml(request.method || '-')}</td>
             <td>${escapeHtml(routeText(request.route || '-'))}</td>
             <td><span class="status-badge ${statusClass}">${statusText}</span></td>
-            <td>${fmt.format(request.duration_ms || request.latency_ms || 0)}ms</td>
+            <td>${escapeHtml(duration)}</td>
           </tr>
         `;
       }).join('');
@@ -863,7 +926,7 @@
         </table>
       `;
     };
-    const anomalyTableRows = (requests, alerts) => {
+    const anomalyTableRows = (requests, alerts, incidents = []) => {
       const requestAnomalies = (requests || []).filter(isRequestAnomaly).slice(0, 5);
       const alertRows = (alerts || []).slice(0, 3).map(alert => `
         <article class="anomaly-card">
@@ -881,8 +944,40 @@
           </div>
         </article>
       `);
+      const incidentRows = (incidents || []).slice(0, 2).map(incident => {
+        const when = incident.last_at ? new Date(incident.last_at).toLocaleTimeString() : '-';
+        const hosts = (incident.hosts || [])
+          .map(item => `${item.host} ${fmt.format(item.count || 0)}`)
+          .join(' / ');
+        const clients = (incident.clients || [])
+          .map(item => `${item.client} ${fmt.format(item.count || 0)}`)
+          .join(' / ');
+        const detail = [
+          incident.detail || '短时间内本地上游连接集中失败',
+          hosts ? `Host: ${hosts}` : '',
+          clients ? `来源: ${clients}` : '',
+        ].filter(Boolean).join(' · ');
+        return `
+          <article class="anomaly-card">
+            <div class="anomaly-meta">
+              <span class="status-badge warn">${escapeHtml(severityLabel(incident.severity || 'warning'))}</span>
+              <span class="anomaly-kind">${escapeHtml(incident.label || '异常批次')}</span>
+            </div>
+            <div class="anomaly-main">
+              <strong title="${escapeHtml(incident.upstream || '-')}">${escapeHtml(incident.upstream || '-')}</strong>
+              <span>${escapeHtml(detail)}</span>
+            </div>
+            <div class="anomaly-side">
+              <strong>按批次和上游上下文标记，不按单条错误硬判</strong>
+              <span>${escapeHtml(when)}</span>
+            </div>
+          </article>
+        `;
+      });
       const requestRows = requestAnomalies.map(request => {
-        const kind = request.success ? '慢请求' : '失败请求';
+        const diagnosis = requestDiagnosisText(request);
+        const kind = diagnosis || (request.success ? '慢请求' : '失败请求');
+        const detail = requestDiagnosisDetail(request) || request.error || routeText(request.route || '-');
         const when = request.started_at ? new Date(request.started_at).toLocaleTimeString() : '-';
         return `
           <article class="anomaly-card">
@@ -892,7 +987,7 @@
             </div>
             <div class="anomaly-main">
               <strong title="${escapeHtml(request.host || '-')}">${escapeHtml(request.host || '-')}</strong>
-              <span>${escapeHtml(request.error || routeText(request.route || '-'))}</span>
+              <span>${escapeHtml(detail)}</span>
             </div>
             <div class="anomaly-side">
               <strong>${escapeHtml(requestAdviceText(request))}</strong>
@@ -901,7 +996,7 @@
           </article>
         `;
       });
-      const rows = [...alertRows, ...requestRows].join('');
+      const rows = [...incidentRows, ...alertRows, ...requestRows].join('');
       if (!rows) {
         return '<div class="table-empty">当前范围内暂无异常请求</div>';
       }
@@ -1684,6 +1779,12 @@
           ? new Date(capture.latest_modified).toLocaleString()
           : '暂无';
         const latestSize = capture.latest_size_kb ? `${capture.latest_size_kb} KB` : '0 KB';
+        const counts = capture.capture_status_counts || {};
+        const quality = `${capture.label || '未知'} · ${capture.detail || '-'}`;
+        const sidecar = capture.sidecar_running
+          ? `运行中${capture.sidecar_pid ? ` · PID ${capture.sidecar_pid}` : ''}`
+          : `未监听${capture.sidecar_error ? ` · ${capture.sidecar_error}` : ''}`;
+        const stderrTail = (capture.stderr_tail || []).join(' / ') || '无';
 
         customSpecsHtml = `
           <div class="modal-specs-block">
@@ -1692,6 +1793,18 @@
               <div class="telemetry-row">
                 <span class="tel-label">捕获目录</span>
                 <span class="tel-value select-text" style="word-break: break-all; font-size: 11px;">${escapeHtml(captureDir || '未检测到目录')}</span>
+              </div>
+              <div class="telemetry-row">
+                <span class="tel-label">Sidecar</span>
+                <span class="tel-value select-text">${escapeHtml(sidecar)}</span>
+              </div>
+              <div class="telemetry-row">
+                <span class="tel-label">数据质量</span>
+                <span class="tel-value select-text">${escapeHtml(quality)}</span>
+              </div>
+              <div class="telemetry-row">
+                <span class="tel-label">状态计数</span>
+                <span class="tel-value select-text">usage ${fmt.format(counts.usage_found || 0)} · no_usage ${fmt.format(counts.no_usage || 0)} · incomplete ${fmt.format(counts.stream_incomplete || 0)} · parse_failed ${fmt.format(counts.parse_failed || 0)}</span>
               </div>
               <div class="telemetry-row">
                 <span class="tel-label">捕获文件</span>
@@ -1704,6 +1817,10 @@
               <div class="telemetry-row">
                 <span class="tel-label">最近写入</span>
                 <span class="tel-value select-text">${escapeHtml(latestModified)}</span>
+              </div>
+              <div class="telemetry-row">
+                <span class="tel-label">stderr</span>
+                <span class="tel-value select-text" style="word-break: break-all; font-size: 11px;">${escapeHtml(stderrTail)}</span>
               </div>
             </div>
             ${captureDir ? `
@@ -2173,6 +2290,7 @@
         `输入 ${compactNumber(u.input_tokens)}`,
         `输出 ${compactNumber(u.output_tokens)}`,
       ]);
+      updateTokenQuality(runtimeData.token_capture_quality || {});
       setMetric(
         'cacheTokens',
         compactNumber(u.cache_read_input_tokens + u.cache_creation_input_tokens),
@@ -2189,7 +2307,7 @@
       setMetric('peakConnections', fmt.format(runtimeData.peak_connections_today || 0));
       text('peakConnectionsSub', `当前 ${fmt.format(runtimeData.active_connections || 0)} · 日期 ${runtimeData.peak_connections_date || '-'}`);
       setMetric('anomalyRequests', fmt.format((p.failed_requests || 0) + (p.slow_requests || 0)));
-      text('anomalyRequestsSub', `失败 ${fmt.format(p.failed_requests || 0)} / 慢建连 ${fmt.format(p.slow_requests || 0)} · 告警 ${fmt.format((p.alerts || []).length)}`);
+      text('anomalyRequestsSub', `失败 ${fmt.format(p.failed_requests || 0)} / 慢建连 ${fmt.format(p.slow_requests || 0)} · 告警 ${fmt.format((p.alerts || []).length)} · 批次 ${fmt.format((p.incident_batches || []).length)}`);
       renderAlerts(p);
       document.getElementById('routes').innerHTML = rows(Object.entries(p.routes));
       document.getElementById('models').innerHTML = modelRows(u.models);
@@ -2201,7 +2319,7 @@
       document.getElementById('recentRequests').innerHTML = recentRows(recentData.requests || []);
       document.getElementById('recentAnomalies').innerHTML = anomalyRows(recentData.requests || []);
       document.getElementById('recentRequestsTable').innerHTML = requestTableRows(recentData.requests || []);
-      document.getElementById('recentAnomaliesTable').innerHTML = anomalyTableRows(recentData.requests || [], p.alerts || []);
+      document.getElementById('recentAnomaliesTable').innerHTML = anomalyTableRows(recentData.requests || [], p.alerts || [], p.incident_batches || []);
       document.getElementById('runtimeStatus').innerHTML = runtimeRows(runtimeData || {});
       updateShellStatus(runtimeData || {});
       renderModelFilter(u.models);

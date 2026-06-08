@@ -10,6 +10,8 @@ from .provider_classifier import classify_provider
 
 
 SLOW_REQUEST_THRESHOLD_MS = 3000
+UPSTREAM_UNAVAILABLE_BATCH_WINDOW_SECONDS = 120
+UPSTREAM_UNAVAILABLE_BATCH_MIN_COUNT = 3
 HOST_FAILURE_RATE_THRESHOLD = 0.10
 HOST_CRITICAL_FAILURE_RATE = 0.50
 MODEL_API_SLOW_ALERT_MIN_COUNT = 2
@@ -31,6 +33,12 @@ DEVELOPER_SERVICE_HOST_MARKERS = (
 CONTENT_SITE_HOST_MARKERS = (
     "douyin.com",
 )
+
+LOCAL_UPSTREAM_HOSTS = {
+    "127.0.0.1",
+    "localhost",
+    "::1",
+}
 
 
 @dataclass(frozen=True)
@@ -274,7 +282,12 @@ class StatsStore:
                 ),
                 "alertable": bool(row["alertable"]),
                 "error": row["error"],
+                "diagnosis": "",
+                "diagnosis_label": "",
+                "diagnosis_detail": "",
+                "diagnosis_batch_count": 0,
             })
+        self._annotate_proxy_request_batches(requests)
         return requests
 
     def get_whitelist_candidates(self, limit=10, since=None):
@@ -570,6 +583,7 @@ class StatsStore:
                 """,
                 [SLOW_REQUEST_THRESHOLD_MS] + params,
             ).fetchall()
+            incident_batches = self._get_proxy_incident_batches(conn, since, until)
 
         total_requests = int(row["total_requests"])
         successful_requests = int(row["successful_requests"])
@@ -696,6 +710,7 @@ class StatsStore:
             "hosts": host_breakdown[:20],
             "clients": clients,
             "alerts": alerts,
+            "incident_batches": incident_batches,
             "alert_counts": {
                 "critical": sum(
                     1 for alert in alerts
@@ -707,6 +722,119 @@ class StatsStore:
                 ),
             },
         }
+
+    def _get_proxy_incident_batches(self, conn, since=None, until=None):
+        where, params = self._time_window_clause("started_at", since, until)
+        conjunction = "AND" if where else "WHERE"
+        rows = conn.execute(
+            f"""
+            SELECT
+                started_at,
+                host,
+                route,
+                success,
+                stage,
+                upstream_host,
+                upstream_port,
+                client_label,
+                client_process,
+                error
+            FROM proxy_requests
+            {where}
+            {conjunction} success = 0
+                AND route = 'proxy'
+                AND stage = 'forward_failed'
+                AND LOWER(COALESCE(upstream_host, '')) IN ('127.0.0.1', 'localhost', '::1')
+                AND (
+                    LOWER(COALESCE(error, '')) LIKE '%winerror 1225%'
+                    OR LOWER(COALESCE(error, '')) LIKE '%connection refused%'
+                    OR LOWER(COALESCE(error, '')) LIKE '%actively refused%'
+                    OR COALESCE(error, '') LIKE '%远程计算机拒绝网络连接%'
+                )
+            ORDER BY started_at ASC
+            """,
+            params,
+        ).fetchall()
+        requests = [
+            {
+                "started_at": row["started_at"],
+                "host": row["host"],
+                "route": row["route"],
+                "success": bool(row["success"]),
+                "stage": row["stage"] or "",
+                "upstream_host": row["upstream_host"] or "",
+                "upstream_port": (
+                    int(row["upstream_port"])
+                    if row["upstream_port"] is not None
+                    else None
+                ),
+                "client_label": row["client_label"] or "Unknown",
+                "client_process": row["client_process"] or "unknown",
+                "error": row["error"] or "",
+            }
+            for row in rows
+        ]
+        self._annotate_proxy_request_batches(requests)
+
+        batches = {}
+        for request in requests:
+            if request.get("diagnosis") != "local_upstream_unavailable_batch":
+                continue
+            window = request.get("diagnosis_window") or {}
+            key = (
+                window.get("first_at") or "",
+                window.get("last_at") or "",
+                request.get("upstream_host") or "",
+                request.get("upstream_port") or 0,
+            )
+            item = batches.setdefault(
+                key,
+                {
+                    "kind": "local_upstream_unavailable_batch",
+                    "label": "上游出口不可达批次",
+                    "severity": "warning",
+                    "count": 0,
+                    "first_at": window.get("first_at") or "",
+                    "last_at": window.get("last_at") or "",
+                    "upstream": (
+                        f"{request.get('upstream_host') or '-'}:"
+                        f"{request.get('upstream_port') or '-'}"
+                    ),
+                    "hosts": {},
+                    "clients": {},
+                    "detail": request.get("diagnosis_detail") or "",
+                },
+            )
+            item["count"] += 1
+            host = request.get("host") or "unknown"
+            client = (
+                f"{request.get('client_label') or 'Unknown'} / "
+                f"{request.get('client_process') or 'unknown'}"
+            )
+            item["hosts"][host] = item["hosts"].get(host, 0) + 1
+            item["clients"][client] = item["clients"].get(client, 0) + 1
+
+        incidents = []
+        for item in batches.values():
+            item["hosts"] = [
+                {"host": host, "count": count}
+                for host, count in sorted(
+                    item["hosts"].items(),
+                    key=lambda entry: entry[1],
+                    reverse=True,
+                )[:5]
+            ]
+            item["clients"] = [
+                {"client": client, "count": count}
+                for client, count in sorted(
+                    item["clients"].items(),
+                    key=lambda entry: entry[1],
+                    reverse=True,
+                )[:5]
+            ]
+            incidents.append(item)
+        incidents.sort(key=lambda item: item["last_at"], reverse=True)
+        return incidents[:5]
 
     def _build_proxy_alerts(self, hosts):
         alerts = []
@@ -760,6 +888,95 @@ class StatsStore:
                     }
                 )
         return alerts[:8]
+
+    def _annotate_proxy_request_batches(self, requests):
+        candidates = [
+            request
+            for request in requests
+            if self._looks_like_local_upstream_refusal(request)
+        ]
+        if len(candidates) < UPSTREAM_UNAVAILABLE_BATCH_MIN_COUNT:
+            return
+
+        batches_by_upstream = {}
+        for request in candidates:
+            key = (
+                request.get("upstream_host") or "",
+                request.get("upstream_port") or 0,
+            )
+            batches_by_upstream.setdefault(key, []).append(request)
+
+        for batch in batches_by_upstream.values():
+            ordered = sorted(
+                batch,
+                key=lambda item: self._request_timestamp(item.get("started_at")),
+            )
+            current = []
+            for request in ordered:
+                if not current:
+                    current = [request]
+                    continue
+                first_at = self._request_timestamp(current[0].get("started_at"))
+                request_at = self._request_timestamp(request.get("started_at"))
+                if (
+                    request_at - first_at
+                    <= UPSTREAM_UNAVAILABLE_BATCH_WINDOW_SECONDS
+                ):
+                    current.append(request)
+                else:
+                    self._mark_upstream_unavailable_batch(current)
+                    current = [request]
+            self._mark_upstream_unavailable_batch(current)
+
+    def _mark_upstream_unavailable_batch(self, batch):
+        if len(batch) < UPSTREAM_UNAVAILABLE_BATCH_MIN_COUNT:
+            return
+        first_at = batch[0].get("started_at") or ""
+        last_at = batch[-1].get("started_at") or ""
+        upstream = (
+            f"{batch[0].get('upstream_host') or '-'}:"
+            f"{batch[0].get('upstream_port') or '-'}"
+        )
+        detail = (
+            f"{len(batch)} 条请求在短时间内经本地上游 {upstream} "
+            "forward_failed 并被拒绝，疑似上游出口代理当时不可达"
+        )
+        for request in batch:
+            request["diagnosis"] = "local_upstream_unavailable_batch"
+            request["diagnosis_label"] = "上游出口不可达批次"
+            request["diagnosis_detail"] = detail
+            request["diagnosis_batch_count"] = len(batch)
+            request["diagnosis_window"] = {
+                "first_at": first_at,
+                "last_at": last_at,
+            }
+
+    def _looks_like_local_upstream_refusal(self, request):
+        if request.get("success"):
+            return False
+        if request.get("route") != "proxy":
+            return False
+        if request.get("stage") != "forward_failed":
+            return False
+        upstream_host = (request.get("upstream_host") or "").lower()
+        if upstream_host not in LOCAL_UPSTREAM_HOSTS:
+            return False
+        error = (request.get("error") or "").lower()
+        refused_markers = (
+            "winerror 1225",
+            "connection refused",
+            "actively refused",
+            "远程计算机拒绝网络连接",
+        )
+        return any(marker in error for marker in refused_markers)
+
+    def _request_timestamp(self, value):
+        if not value:
+            return 0.0
+        try:
+            return datetime.fromisoformat(value).timestamp()
+        except ValueError:
+            return 0.0
 
     def _disabled_service_host_match(self, host):
         host = (host or "").lower()
@@ -1360,10 +1577,15 @@ class StatsStore:
         return sql, params
 
     def _usage_time_window_clause(self, since, until=None):
-        where, params = self._time_window_clause("timestamp", since, until)
-        if where:
-            return f"{where} AND source_file LIKE ?", params + ["%token-capture-%"]
-        return "WHERE source_file LIKE ?", ["%token-capture-%"]
+        clauses = ["source_file LIKE ?"]
+        params = ["%token-capture-%"]
+        if since:
+            clauses.append("datetime(timestamp) >= datetime(?)")
+            params.append(since)
+        if until:
+            clauses.append("datetime(timestamp) < datetime(?)")
+            params.append(until)
+        return f"WHERE {' AND '.join(clauses)}", params
 
     def _bucket_key(self, value, interval):
         dt = parse_datetime(value)
