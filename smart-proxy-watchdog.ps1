@@ -282,6 +282,47 @@ function Ensure-TlsRelayRunning {
     }
 }
 
+function Get-MitmTokenCaptureProcess {
+    Get-CimInstance Win32_Process | Where-Object {
+        ($_.Name -eq 'python.exe' -or $_.Name -eq 'pythonw.exe') -and
+        $_.CommandLine -like "*mitm_token_capture_addon.py*"
+    }
+}
+
+function Ensure-MitmTokenCaptureRunning {
+    $prefFile = Join-Path $env:USERPROFILE ".smart-proxy\claude-mitm-token-capture.pref"
+    if (-not (Test-Path -LiteralPath $prefFile)) {
+        return
+    }
+
+    $pref = [System.IO.File]::ReadAllText($prefFile, [System.Text.Encoding]::UTF8).Trim()
+    if ($pref -ne "enable") {
+        return
+    }
+
+    $processes = @(Get-MitmTokenCaptureProcess)
+    $captureReady = Test-TcpPort -HostName "127.0.0.1" -Port 8891 -TimeoutMilliseconds 1000
+
+    if (-not $processes -or -not $captureReady) {
+        Write-WatchdogLog "[Mitm-Heal] MITM Token Capture (8891) unhealthy or not running. Re-launching..."
+        foreach ($process in $processes) {
+            Write-WatchdogLog "[Mitm-Heal] stopping zombie mitm-token-capture PID $($process.ProcessId)"
+            Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+
+        $scriptPath = Join-Path $PSScriptRoot "start-mitm-token-capture.ps1"
+        if (Test-Path -LiteralPath $scriptPath) {
+            try {
+                & $scriptPath -Port 8891 -Background
+                Write-WatchdogLog "[Mitm-Heal] MITM Token Capture sidecar re-launched in background."
+            }
+            catch {
+                Write-WatchdogLog "[Mitm-Heal] Re-launch error: $($_.Exception.Message)"
+            }
+        }
+    }
+}
+
 function Get-RuntimeStatus {
     $started = Get-Date
     try {
@@ -441,6 +482,7 @@ Write-WatchdogLog "watchdog starting pid=$PID script=$resolvedProxyScript python
 while ($true) {
     try {
         Ensure-TlsRelayRunning
+        Ensure-MitmTokenCaptureRunning
         $health = Test-SmartProxyHealth
         $portOwners = Get-PortOwnerSummary -Ports @($ProxyPort, $DashboardPort)
         if ($health.process_count -gt 0) {

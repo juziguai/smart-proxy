@@ -2,13 +2,17 @@
 
 Windows 本地智能代理 sidecar。
 
-当前版本：`v0.7.0`
+当前版本：`v0.7.1`
 
 它固定监听 `127.0.0.1:8889`，由 Claude Code、Antigravity、Cockpit Tools 等客户端连接；请求进来后，smart-proxy 会按当前 Windows 系统代理状态、白名单和本地规则决定直连还是转发到上游代理。
 
 同时提供一个本地 Dashboard：`http://127.0.0.1:8890`，用于查看连接、延迟、错误、用量和运行状态。
 
 ## 更新摘要
+
+`v0.7.1` 改进了侧车守护体验：
+
+- Watchdog 守护脚本支持检测并自动在后台拉起挂掉的 `8891` (MITM Token Capture) 侧车服务，避免手动维护端口导致连接被拒。
 
 `v0.7.0` 聚焦 MITM Token Capture 质量闭环与请求流合并：
 

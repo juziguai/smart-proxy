@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.7.1
+
+改进了 8891 拦截侧车的守护拉起与自检诊断体验：
+
+- Watchdog 守护脚本支持检测并自动在后台拉起挂掉的 8891 (MITM Token Capture) 侧车服务，防止本地代理连接被拒。
+- 细化 Doctor 自检中对 Token 捕获质量指标的状态诊断与修复建议引导。
+
 ## v0.7.0
 
 MITM Token Capture 质量闭环与请求流合并：

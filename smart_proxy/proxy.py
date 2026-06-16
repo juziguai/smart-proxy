@@ -354,6 +354,47 @@ def build_token_capture_quality_report():
     return quality
 
 
+def _token_capture_doctor_status(quality):
+    if not quality.get("sidecar_running"):
+        return "warning"
+    counts = quality.get("capture_status_counts") or {}
+    has_hard_problem = (
+        int(counts.get("parse_failed") or 0) > 0
+        or int(counts.get("stream_incomplete") or 0) > 0
+    )
+    if has_hard_problem:
+        return "warning"
+    if int(quality.get("usage_records") or 0) > 0:
+        return "ok"
+    return "warning"
+
+
+def _token_capture_doctor_fix(quality):
+    if not quality.get("sidecar_running"):
+        return "如需统计今日 Token，请在 claude.ps1 启动时启用 MITM Token Capture。"
+    counts = quality.get("capture_status_counts") or {}
+    parse_failed = int(counts.get("parse_failed") or 0)
+    incomplete = int(counts.get("stream_incomplete") or 0)
+    no_usage = int(counts.get("no_usage") or 0)
+    usage = int(counts.get("usage_found") or 0)
+    if parse_failed or incomplete:
+        return (
+            "MITM 已运行，但存在解析失败或流式响应未完成记录。请查看 stderr "
+            "和最近请求里的 capture_status，必要时保留样本补解析规则。"
+        )
+    if usage > 0 and no_usage > 0:
+        return (
+            "MITM 已运行且已捕获 usage。no_usage 表示部分响应未携带 usage 字段，"
+            "今日 Token 仍以 usage_found 为准；如怀疑漏计，请按最近请求中的 Host/模型进一步核对。"
+        )
+    if usage > 0:
+        return "MITM 已运行且今日已有 usage 记录，无需处理。"
+    return (
+        "MITM 已运行但今日尚未捕获 usage。请确认 Claude Code 本次会话走 127.0.0.1:8891，"
+        "并在产生模型请求后刷新。"
+    )
+
+
 def _doctor_item(key, label, ok, detail, fix="", status=None, data=None, actions=None):
     if status is None:
         status = "ok" if ok else "warning"
@@ -459,11 +500,8 @@ async def build_doctor_report():
         )
     token_capture_quality = build_token_capture_quality_report()
     token_capture_data.update(token_capture_quality)
-    token_capture_status = (
-        "ok"
-        if token_capture_quality.get("status") == "accurate"
-        else "warning"
-    )
+    token_capture_status = _token_capture_doctor_status(token_capture_quality)
+    token_capture_fix = _token_capture_doctor_fix(token_capture_quality)
     token_capture_detail = (
         f"{token_capture_quality.get('sidecar_url')} "
         f"{'已监听' if token_capture_quality.get('sidecar_running') else '未监听'}"
@@ -774,7 +812,7 @@ async def build_doctor_report():
             token_capture_quality.get("sidecar_running")
             and token_capture_quality.get("status") in {"accurate", "partial"},
             token_capture_detail,
-            "如需统计今日 Token，请在 claude.ps1 启动时启用 MITM Token Capture。",
+            token_capture_fix,
             data=token_capture_data,
             status=token_capture_status,
         ),
